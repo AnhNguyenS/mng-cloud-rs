@@ -327,10 +327,13 @@ mod tests {
     fn rejects_tampering_and_wrong_keys() {
         let config = config();
         let (_, token) = config.issue(1, "alice", NOW).unwrap();
-        let mut bytes = token.into_bytes();
-        let last = bytes.len() - 1;
-        bytes[last] = if bytes[last] == b'A' { b'B' } else { b'A' };
-        let tampered = String::from_utf8(bytes).unwrap();
+        // Change the first signature character, not the last: the final base64
+        // character only carries padding bits and may decode to the same bytes.
+        let (prefix, signature) = token.rsplit_once('.').unwrap();
+        let mut signature = signature.to_owned();
+        let first = signature.as_bytes()[0];
+        signature.replace_range(..1, if first == b'A' { "B" } else { "A" });
+        let tampered = format!("{prefix}.{signature}");
         assert!(matches!(
             config.verify(&tampered, NOW),
             Err(SessionError::BadSignature)
