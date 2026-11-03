@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/mng-auth",
     "crates/mng-core",
+    "crates/mng-db",
     "crates/mngd",
     "crates/mng-wasm",
     "crates/mng-sign",
@@ -15,15 +17,20 @@ authors = ["MNG Cloud"]
 publish = false
 
 [workspace.dependencies]
+mng-auth = { path = "crates/mng-auth" }
 mng-core = { path = "crates/mng-core" }
+mng-db = { path = "crates/mng-db" }
 
 aes = "0.8"
 anyhow = "1"
+argon2 = "0.5"
 axum = "0.8"
 base64 = "0.22"
+bcrypt = "0.17"
 cbc = { version = "0.1", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
 hex = "0.4"
+hmac = "0.12"
 p256 = { version = "0.13", features = ["ecdsa"] }
 pbkdf2 = "0.12"
 rand_core = { version = "0.6", features = ["getrandom"] }

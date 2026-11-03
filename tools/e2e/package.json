@@ -1,0 +1,9 @@
+{
+  "name": "mng-cloud-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Manual end-to-end checks for the MNG Cloud Trusted extension",
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  }
+}

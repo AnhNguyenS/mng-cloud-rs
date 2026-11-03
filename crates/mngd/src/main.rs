@@ -24,6 +24,12 @@ use tokio::net::TcpListener;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod auth;
+mod db;
+
+use auth::AuthState;
+use db::DatabaseState;
+
 /// Enforced for the new immutable app. The legacy PHP UI keeps its own,
 /// report-only policy until it is retired.
 const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; require-trusted-types-for 'script'; trusted-types mng-ui;";
@@ -32,6 +38,8 @@ const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; wor
 struct AppState {
     config: Arc<Config>,
     started: Instant,
+    db: DatabaseState,
+    auth: AuthState,
 }
 
 #[tokio::main]
@@ -39,10 +47,14 @@ async fn main() -> anyhow::Result<()> {
     let config_path = config_path();
     let config = Config::load(config_path.as_deref()).context("load mngd configuration")?;
     init_tracing(&config.log_filter);
+    let db = DatabaseState::load(&config);
+    let auth = AuthState::load(&config, db.clone());
 
     let state = AppState {
         config: Arc::new(config),
         started: Instant::now(),
+        db,
+        auth,
     };
 
     let address: SocketAddr = state
@@ -55,6 +67,9 @@ async fn main() -> anyhow::Result<()> {
         %address,
         web_root = %state.config.web_root.display(),
         data_dir = %state.config.data_dir.display(),
+        database = %state.db.path.display(),
+        database_mode = state.db.mode_name(),
+        auth_available = state.auth.available(),
         version = env!("CARGO_PKG_VERSION"),
         "mngd starting"
     );
@@ -62,10 +77,13 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(address)
         .await
         .with_context(|| format!("bind {address}"))?;
-    axum::serve(listener, router(state.clone()))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve HTTP")?;
+    axum::serve(
+        listener,
+        router(state.clone()).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serve HTTP")?;
     Ok(())
 }
 
@@ -73,10 +91,24 @@ fn router(state: AppState) -> Router {
     let static_files =
         ServeDir::new(state.config.web_root.clone()).append_index_html_on_directories(true);
 
+    let protected_api = Router::new()
+        .route("/v1/auth/me", get(auth::me))
+        .route("/v1/auth/logout", axum::routing::post(auth::logout))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_session,
+        ));
+    let api = auth::api_layers(
+        Router::new()
+            .route("/v1/auth/login", axum::routing::post(auth::login))
+            .merge(protected_api),
+    );
+
     Router::new()
         .route("/healthz", get(health))
         .route("/api/v1/health", get(health))
         .route("/readyz", get(ready))
+        .nest("/api", api)
         .nest_service("/app", static_files)
         .fallback(not_found)
         .with_state(state)
@@ -102,7 +134,25 @@ async fn ready(State(state): State<AppState>) -> Response {
         .await
         .map(|meta| meta.is_dir())
         .unwrap_or(false);
+
+    let (probe, db_error) = match state.db.database.clone() {
+        Some(database) => match tokio::task::spawn_blocking(move || database.probe()).await {
+            Ok(Ok(probe)) => (Some(probe), None),
+            Ok(Err(error)) => (None, Some(error.to_string())),
+            Err(error) => (None, Some(format!("database probe task failed: {error}"))),
+        },
+        None => (None, state.db.startup_error.clone()),
+    };
+    let db_available = probe.is_some();
+    let auth_available = state.auth.available();
     let ready = web_root && data_dir;
+    let status = if !ready {
+        "not_ready"
+    } else if db_available && auth_available {
+        "ready"
+    } else {
+        "degraded"
+    };
     (
         if ready {
             StatusCode::OK
@@ -110,9 +160,21 @@ async fn ready(State(state): State<AppState>) -> Response {
             StatusCode::SERVICE_UNAVAILABLE
         },
         Json(json!({
-            "status": if ready { "ready" } else { "not_ready" },
+            "status": status,
             "web_root": web_root,
             "data_dir": data_dir,
+            "database": {
+                "path": state.db.path.display().to_string(),
+                "mode": state.db.mode_name(),
+                "available": db_available,
+                "schema_version": probe.map(|probe| probe.schema_version),
+                "users": probe.map(|probe| probe.users),
+                "error": db_error,
+            },
+            "auth": {
+                "available": auth_available,
+                "error": state.auth.error(),
+            },
         })),
     )
         .into_response()

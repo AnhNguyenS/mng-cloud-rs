@@ -1,0 +1,15 @@
+[package]
+name = "mng-db"
+description = "Read-only SQLite models for the MNG Cloud edge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusqlite = { version = "0.41", features = ["bundled"] }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

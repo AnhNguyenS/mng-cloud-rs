@@ -1,5 +1,34 @@
 # Security model
 
+## Trust source
+
+The cloud origin is **not** trusted to describe itself. The trust anchor is the
+P-256 public key pinned in the browser extension at build time:
+
+```
+offline signing machine                 GitHub repository / Pages
+  mng-sign package ──┐                   release.json + release.sig
+  mng-sign release ──┴── signed bytes ──► manifest.json + manifest.sig
+                                                │
+                                                ▼
+                                   Orion / Chromium + MNG Trusted extension
+                                     pinned P-256 key (config.js)
+                                     ├── verify release + manifest signatures
+                                     ├── enforce monotonic release sequence
+                                     ├── fetch every signed asset directly
+                                     ├── SHA-256 the actual response bytes
+                                     ├── observe navigation status/MIME
+                                     └── scan DOM/performance for unlisted files
+                                                │
+                                                ▼
+                                        Cloud / mng-cloud origin
+                                     (frontend · API · Seafile)
+```
+
+The extension is authoritative for the green badge. The PWA's own service
+worker still verifies the signed manifest before caching (defense in depth),
+but it is no longer the update trust anchor.
+
 ## Boundaries
 
 | Asset | Where it lives | Who can read it |
@@ -8,11 +37,13 @@
 | Derived content key/IV | Rust/WASM linear memory | browser tab only |
 | Encrypted blocks | Seafile storage | server and storage admins |
 | Update private key | offline signing machine | release signer only |
-| Update public key | pinned in `sw.js` | public |
-| Session secrets | `mngd` / SQLite (later slice) | server process |
+| Update public key | extension `config.js` + `sw.js` | public |
+| Release metadata | GitHub repository / Pages | public |
+| Session signing secret | `/etc/mng-cloud/session.key` or `MNGD_SESSION_SECRET` | root, `mng` process |
+| Password hashes | legacy SQLite `users` table | `mng` process, read-only |
 
 `mngd` never accepts a library password. There is no server-side fallback that
-can decrypt Blocks; a compromised server can delete or withhold ciphertext,
+can decrypt blocks; a compromised server can delete or withhold ciphertext,
 but cannot recover plaintext without the user's password.
 
 ## E2EE engine
@@ -27,6 +58,24 @@ but cannot recover plaintext without the user's password.
 - JavaScript is limited to UI and the browser adapter; it does not reimplement
   crypto.
 
+## Authentication
+
+- `mng-auth` verifies legacy PHP-compatible password hashes: bcrypt `$2y$`,
+  `$2b$`, `$2a$` and Argon2 (`$argon2id$`, `$argon2i$`, `$argon2d$`).
+- Unknown usernames and inactive accounts perform the same bcrypt work as a
+  real check before returning `401`, so response timing does not leak account
+  existence.
+- Sessions are stateless HMAC-SHA256 cookies (`HttpOnly`, `Secure`,
+  `SameSite=Lax`, `Path=/`) with a random nonce and per-session CSRF token.
+  Only the secret is stored; there is no server-side session table to steal.
+- Every unsafe `/api/v1` request requires `X-CSRF-Token` matching the token
+  bound into the signed cookie. Login is the only unauthenticated write route.
+- Login attempts are throttled in memory per client IP and per IP+username.
+  Multi-process deployments need a shared limiter before scaling out.
+- The session secret must be at least 32 bytes. If it is missing, login fails
+  closed with `503`; the static PWA and health probes remain available.
+- `last_login_at` is not written while SQLite is opened read-only.
+
 ## Immutable frontend
 
 - Releases are copied to `/var/www/mng-cloud-app/releases/<version>/`, owned by
@@ -37,45 +86,92 @@ but cannot recover plaintext without the user's password.
 - PHP-FPM, if still present during the transition, must not be in the `mng`
   group and has no write path into the release tree.
 
-## Signed updates
+## Signed releases
 
-`mng-sign package` performs the offline step:
+`mng-sign package` performs the offline packaging step:
 
 1. Copy the web template.
 2. Stamp `APP_VERSION` and the public P-256 JWK into `sw.js`.
-3. Hash every asset with SHA-256.
+3. Hash every asset with SHA-256 and record its browser-facing MIME type.
 4. Sign the canonical manifest bytes with ECDSA P-256 / SHA-256.
 5. Write `manifest.json` and `manifest.sig` (raw `r||s`, hex).
 
-The service worker:
+`mng-sign release` then publishes the release pointer:
 
-1. Fetches the manifest and signature with `cache: no-store`.
-2. Verifies the signature against the pinned JWK.
-3. Rejects non-semver versions, unsafe paths, duplicate assets and missing
-   required files.
-4. Fetches every asset, verifies its SHA-256 and only then writes the cache.
-5. Verifies its own `sw.js` bytes against the manifest.
-6. Rejects a version lower than the highest version seen by that browser.
-7. Activates only after all checks pass.
+1. Verify the package against the same public key.
+2. Write `release.json` containing the version, monotonic `sequence`,
+   `app_base`, manifest SHA-256 and manifest file names.
+3. Sign `release.json` into `release.sig`.
+4. Copy `manifest.json` and `manifest.sig` next to the release metadata for a
+   self-contained GitHub Pages directory.
 
-The private key is generated by `mng-sign keygen` on an offline machine. It is
-never committed, never uploaded to GitHub and never copied to the server. CI
-artifacts are unsigned; deployment refuses a directory without a manifest.
+Only the four files in the release directory and the signed app assets go to
+GitHub. The private key is generated by `mng-sign keygen` on an offline machine.
+It is never committed, never uploaded to GitHub and never copied to the server.
+CI artifacts are unsigned; deployment refuses a directory without a manifest.
 
-### Known limitation
+### Extension verification
 
-A PWA bootstraps trust from the origin that serves `sw.js`. An attacker who
-fully controls the origin at first load can serve a different worker. The
-signature chain protects subsequent signed releases, not the initial TLS
-fetched bytes. Mitigations:
+Before showing a green badge the extension:
 
-- serve only over TLS with modern ciphers;
-- keep the public key pinned in the installed worker;
-- keep the offline key out of CI and the server;
-- for a stronger guarantee, wrap the PWA in a signed native shell later and
-  pin the origin certificate/public key there.
+1. Fetches `release.json` and `release.sig` from `releaseBase` (GitHub), not
+   from the cloud origin.
+2. Verifies the ECDSA signature with the pinned public JWK.
+3. Validates schema, semver version, positive sequence, `app_base` and all
+   relative paths.
+4. Rejects `sequence` lower than the highest sequence this browser has seen, or
+   a reused sequence with a different version (rollback guard in
+   `chrome.storage.local`).
+5. Fetches `manifest.json`/`manifest.sig`, verifies the signature and checks the
+   manifest SHA-256 against `release.json`.
+6. Fetches every manifest asset **directly from the cloud origin** using the
+   extension's host permission. This bypasses a page-controlled service worker
+   and gives the extension the origin's actual bytes. SHA-256, size and MIME are
+   compared with the signed manifest.
+7. In parallel, the content script re-fetches every signed asset in the page's
+   origin. This catches a page service worker that serves modified bytes to the
+   document even when the origin's stored files are genuine.
+8. Hashes the HTML document against the signed `index.html` and checks the
+   visible `mng-version` meta tag against the signed release.
+9. Watches `webNavigation`/`webRequest` for navigation status, MIME and
+   `X-Content-Type-Options: nosniff`.
+10. Watches DOM mutations and resource timing entries for critical resources
+    (scripts, stylesheets, manifests, fonts, WASM) that are not in the signed
+    manifest.
 
-This limitation is documented rather than hidden.
+### Failure classification
+
+| Condition | State |
+| --- | --- |
+| Signatures, manifest hash, version, `app_base` or rollback guard fail | **NOT SAFE** (red) |
+| Any signed asset hash, size or MIME differs; unlisted critical resource; failed load; document mismatch | **NOT SAFE** (red) |
+| Release metadata cannot be fetched / transport error | **Unverified** (amber); a previously verified release may be used with a visible warning |
+| Page or content script cannot complete in time | **Unverified** (amber) |
+| All checks complete | **Verified** (green) |
+
+A bad signature or rollback is never hidden by the cached release. Cache
+fallback exists for connectivity failures only.
+
+### Known limitations
+
+- A page-controlled service worker can make subresource requests appear to the
+  extension's `webRequest` listener as worker traffic with no tab id. The
+  extension therefore does not depend on `webRequest` for asset integrity: it
+  hashes the origin bytes itself and the content script watches what the DOM
+  actually requests.
+- Browser extension APIs do not expose every response body. Integrity coverage
+  is the signed static release, the document, navigation metadata and observed
+  resource loads. API responses are protected by TLS and the session model, not
+  by the release manifest.
+- The extension itself is the trust anchor. It must be installed and updated
+  from a trusted distribution channel. Sideloaded builds should be compared
+  with a published SHA-256.
+- The first visit before the PWA service worker is installed is protected by
+  the extension's direct fetch; a previously compromised browser profile with a
+  malicious controlling worker is outside the model.
+- Key rotation requires shipping a new extension build with the new pinned key
+  (or a transition release that trusts both keys). Plan rotation before the
+  first production release.
 
 ## CSP and Trusted Types
 
@@ -109,6 +205,10 @@ sanitize its input; do not add `'unsafe-inline'` or `'unsafe-eval'`.
 - GitHub Actions builds ARMv7 from a tagged commit and publishes SHA-256
   checksums.
 - The server receives only the binary and the signed static release.
+- GitHub Pages (or the repository's release branch) hosts the signed
+  `release.json`, `release.sig`, `manifest.json` and `manifest.sig`.
+- The extension is built from `extension/src` by `tools/build-extension.py`,
+  which pins the public key and stamps allowed deployment origins.
 - `Cargo.lock` is committed; dependency updates are reviewed.
 - `#![forbid(unsafe_code)]` is set in the native and WASM crates.
 - Release binaries are stripped and statically linked against musl.
@@ -117,10 +217,10 @@ sanitize its input; do not add `'unsafe-inline'` or `'unsafe-eval'`.
 
 - Never log passwords, derived keys, `magic`, `random_key` or block URLs with
   tokens.
-- Session cookies (later slice) are `HttpOnly`, `Secure`, `SameSite=Lax`, with
-  a rotating CSRF token.
+- Session cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, with a
+  per-session CSRF token. Rotate the signing secret to revoke every session.
 - The blank-media audit log records owner id, filename, size and quarantine
   path; it contains no file content.
 - Rotate the update signing key if the offline machine is lost. A new key
-  requires a new app install or a signed transition release; plan this before
-  the first production release.
+  requires a new extension build (or a signed transition release); plan this
+  before the first production release.

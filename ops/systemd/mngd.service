@@ -14,6 +14,11 @@ Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=10s
 
+# Optional: MNGD_SESSION_SECRET=... for a root-owned 0600 env file. Without a
+# secret, authentication fails closed (login returns 503) while health probes
+# and the signed PWA keep working.
+EnvironmentFile=-/etc/mng-cloud/mngd.env
+
 # Read-only application tree, writable state only below /var/lib/mng-cloud.
 NoNewPrivileges=true
 PrivateDevices=true

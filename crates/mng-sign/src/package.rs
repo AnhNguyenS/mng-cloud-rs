@@ -27,6 +27,10 @@ pub struct Asset {
     pub path: String,
     pub sha256: String,
     pub size: u64,
+    /// Expected `Content-Type` for the extension's response check. Older
+    /// manifests may not contain it; verifiers treat an empty value as unknown.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mime: String,
 }
 
 /// Copy the web template, stamp the version/public key and sign the result.
@@ -123,10 +127,12 @@ pub fn collect(root: &Path) -> Result<Vec<Asset>> {
         }
         let bytes =
             fs::read(entry.path()).with_context(|| format!("read {}", entry.path().display()))?;
+        let mime = mime_for(&relative).to_owned();
         assets.push(Asset {
             path: relative,
             sha256: hex::encode(Sha256::digest(&bytes)),
             size: bytes.len() as u64,
+            mime,
         });
     }
     assets.sort_by(|left, right| left.path.cmp(&right.path));
@@ -222,6 +228,38 @@ fn relative_path(root: &Path, path: &Path) -> Result<String> {
     Ok(parts.join("/"))
 }
 
+/// Browser-facing MIME type expected from the static edge. The extension
+/// compares this against the actual response header and accepts a small set of
+/// aliases for JavaScript, JSON and icon files.
+pub fn mime_for(path: &str) -> &'static str {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "html" | "htm" => "text/html",
+        "js" | "mjs" => "text/javascript",
+        "css" => "text/css",
+        "wasm" => "application/wasm",
+        "json" => "application/json",
+        "webmanifest" => "application/manifest+json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "txt" => "text/plain",
+        "xml" => "application/xml",
+        _ => "application/octet-stream",
+    }
+}
+
 fn is_excluded(path: &str) -> bool {
     path == "manifest.json"
         || path == "manifest.sig"
@@ -231,7 +269,7 @@ fn is_excluded(path: &str) -> bool {
         || path.starts_with(".git/")
 }
 
-fn validate_version(version: &str) -> Result<()> {
+pub fn validate_version(version: &str) -> Result<()> {
     if version.is_empty()
         || version.len() > 64
         || !version

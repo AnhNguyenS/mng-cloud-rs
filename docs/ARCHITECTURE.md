@@ -11,10 +11,29 @@ Internet ───────────────────────�
                      ▼                                      ▼                     ▼
               /app/  mngd (Rust)                    /seafhttp/ seaf-server   /seahub/ Seahub
                      │                              127.0.0.1:8082           127.0.0.1:8000
-                     ├── immutable signed PWA                 (C, upstream)          (Python, upstream)
+                     ├── signed PWA (defense in depth)       (C, upstream)          (Python, upstream)
                      ├── /api/v1/* auth, RBAC, media
                      └── /healthz /readyz
 ```
+
+The browser is not just a client of the origin. Before trusting `/app/`, the
+MNG Trusted extension reads signed release metadata from GitHub and compares it
+with bytes fetched directly from the cloud origin:
+
+```
+        GitHub repository / Pages                      Cloud origin
+   release.json · release.sig                    /app/ · /api/v1/* · Seafile
+   manifest.json · manifest.sig                           │
+                 │ signed bytes                           │
+                 ▼                                        │
+   Orion / Chromium + MNG Trusted extension                │
+     pinned P-256 public key                               │
+     verify signatures + sequence ─────────────────────────┘
+     hash assets + watch DOM/requests          (extension sees both sides)
+```
+
+GitHub is only transport for signed bytes. The extension makes the trust
+decision; the cloud origin is never trusted to describe itself.
 
 - **Seafile stays upstream.** `seaf-server` owns repositories, blocks and the
   encrypted-library format. Seahub remains available for upstream admin and
@@ -26,6 +45,10 @@ Internet ───────────────────────�
   metadata and one-time block URLs.
 - **The frontend is immutable.** Releases live in versioned, read-only
   directories. `mngd` serves them; no runtime process has write access.
+- **Updates are verified outside the origin.** The PWA service worker still
+  verifies the signed manifest before caching, but the extension is the trust
+  anchor and fails closed to red when signatures, hashes, MIME, sequence or
+  resource lists differ.
 
 ## Ports and trust zones
 
@@ -58,6 +81,26 @@ The fixed salt, PBKDF2 iteration counts and AES-CBC layout are documented in
 `crates/mng-core/src/crypto/e2ee.rs` and locked by WebCrypto-generated vectors
 in `crates/mng-core/tests/fixtures/e2ee_kat.json`.
 
+## Authentication and API sessions
+
+```
+POST /api/v1/auth/login   ── bcrypt/Argon2 verify against users.password_hash
+                          └─► HMAC-SHA256 session cookie + CSRF token
+GET  /api/v1/auth/me      ── signed cookie → fresh user row (active flag)
+POST /api/v1/auth/logout  ── requires X-CSRF-Token, clears the cookie
+```
+
+- `mng-auth` contains the password, session and rate-limit primitives. `mngd`
+  provides the SQLite row, client address and HTTP mapping.
+- Sessions are stateless: the cookie carries uid, username, expiry, nonce and
+  CSRF token, signed with a key derived from `/etc/mng-cloud/session.key`.
+- Passwords never leave the request body; logs contain only the username, uid
+  and client IP.
+- The database connection used for login is read-only. `last_login_at` stays
+  untouched until a dedicated native writer replaces PHP.
+- `readyz` exposes whether auth is configured, so a missing secret is visible
+  without exposing the secret itself.
+
 ## Why not rewrite `seaf-server`
 
 `seaf-server` is the storage engine and the compatibility boundary for the
@@ -72,25 +115,32 @@ project.
 developer machine                 GitHub Actions                 offline machine
 -----------------                 --------------                 ---------------
 commit/tag ─────────────────────► test + clippy
-                                  cargo build --target armv7
-                                  wasm-pack build
+                                  tools/build-armv7.sh (Zig)
+                                  wasm build
                                         │
                                         ▼
                                   unsigned artifact
                                         │
                                         ▼
                                   mng-sign package ── private P-256 key
-                                        │              (never uploaded)
-                                        ▼
-                                  signed manifest + assets
+                                  mng-sign release ── (never uploaded)
                                         │
                                         ▼
-                                  server: deploy-mngd.sh
-                                  verify public key → install read-only
+                                  signed app + signed release metadata
+                                        │
+                       ┌────────────────┴────────────────┐
+                       ▼                                 ▼
+              GitHub Pages (release/)            server: deploy-mngd.sh
+              release.json / release.sig         verify, install read-only
+              manifest.json / manifest.sig
+                       │
+                       ▼
+              extension fetches, verifies, hashes cloud bytes
 ```
 
 GitHub Actions never receives the signing key. The server receives a native
-ARMv7 binary, the signed static release and the public key only.
+ARMv7 binary, the signed static release and the public key only. The extension
+receives no secret: it pins the public key and reads public, signed metadata.
 
 ## Non-goals in this slice
 

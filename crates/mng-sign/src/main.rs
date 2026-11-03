@@ -8,6 +8,7 @@
 
 mod keyfile;
 mod package;
+mod release;
 
 use std::path::PathBuf;
 
@@ -54,6 +55,35 @@ enum Command {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Sign release metadata that pins the current manifest and sequence.
+    ///
+    /// Publish `release.json`, `release.sig`, `manifest.json` and `manifest.sig`
+    /// to GitHub Pages. The browser extension reads them from there, not from
+    /// the cloud origin.
+    Release {
+        #[arg(long)]
+        app: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        sequence: u64,
+        #[arg(long, default_value = "/app/")]
+        app_base: String,
+        #[arg(long)]
+        key: PathBuf,
+    },
+    /// Verify release metadata, its manifest signature and (optionally) assets.
+    VerifyRelease {
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(long)]
+        dir: PathBuf,
+        /// Signed app directory to check against the release manifest.
+        #[arg(long)]
+        app: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -92,6 +122,40 @@ fn main() -> Result<()> {
                 dir.display(),
                 manifest.version,
                 manifest.assets.len()
+            );
+        }
+        Command::Release {
+            app,
+            out,
+            version,
+            sequence,
+            app_base,
+            key,
+        } => {
+            let signing = keyfile::load_signing(&key)?;
+            let release = release::create(&app, &out, &version, sequence, &app_base, &signing)?;
+            println!(
+                "signed release v{} sequence {} from {}: {}/release.json",
+                release.version,
+                release.sequence,
+                app.display(),
+                out.display()
+            );
+        }
+        Command::VerifyRelease {
+            public_key,
+            dir,
+            app,
+        } => {
+            let public = keyfile::load_public(&public_key)?;
+            let (release, manifest) = release::verify(&dir, &public, app.as_deref())
+                .with_context(|| format!("verify release {}", dir.display()))?;
+            println!(
+                "verified release v{} sequence {}: {} assets, app_base {}",
+                release.version,
+                release.sequence,
+                manifest.assets.len(),
+                release.app_base
             );
         }
     }

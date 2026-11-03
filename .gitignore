@@ -2,6 +2,9 @@
 /dist
 /artifacts
 /web/assets/wasm/
+/extension/config.local.json
+/extension/config.*.local.json
+node_modules/
 *.pdb
 .DS_Store
 Thumbs.db

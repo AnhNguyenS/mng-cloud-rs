@@ -1,0 +1,22 @@
+[package]
+name = "mng-auth"
+description = "Password, session-cookie and login rate-limit primitives for MNG Cloud"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+argon2.workspace = true
+base64.workspace = true
+bcrypt.workspace = true
+hmac.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+argon2.workspace = true

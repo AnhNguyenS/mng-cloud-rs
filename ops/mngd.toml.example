@@ -3,3 +3,14 @@ web_root = "/var/www/mng-cloud-app/current"
 data_dir = "/var/lib/mng-cloud"
 public_url = "https://cloud.example.com"
 log_filter = "info,mngd=info"
+
+# Session cookie. The signing secret is NOT stored here; set
+# MNGD_SESSION_SECRET or put it in session_key_file.
+session_key_file = "/etc/mng-cloud/session.key"
+session_ttl_secs = 43200
+session_cookie = "mng_session"
+session_cookie_secure = true
+
+# Login throttling (per client IP and per IP+username).
+login_max_attempts = 5
+login_window_secs = 300

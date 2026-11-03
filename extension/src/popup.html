@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MNG Cloud Trusted</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="mark" aria-hidden="true">M</div>
+    <div>
+      <h1>MNG Cloud Trusted</h1>
+      <p id="subtitle">Đang đọc trạng thái…</p>
+    </div>
+  </header>
+
+  <main>
+    <section id="status-card" class="status checking" aria-live="polite">
+      <div class="status-head">
+        <span id="status-icon" class="status-icon" aria-hidden="true">…</span>
+        <strong id="status-title">Đang kiểm tra</strong>
+      </div>
+      <p id="status-detail">Đang kết nối tới trang đang mở…</p>
+      <dl class="facts">
+        <div><dt>Phiên bản đã ký</dt><dd id="release-version">—</dd></div>
+        <div><dt>Phiên bản trang</dt><dd id="page-version">—</dd></div>
+        <div><dt>Nguồn xác minh</dt><dd id="source">—</dd></div>
+        <div><dt>Sequence</dt><dd id="sequence">—</dd></div>
+      </dl>
+    </section>
+
+    <section id="issues-section" class="issues" hidden>
+      <h2>Chi tiết</h2>
+      <ul id="issues"></ul>
+    </section>
+
+    <section id="inactive" class="empty" hidden>
+      <p>Trang này không thuộc cấu hình MNG Cloud Trusted.</p>
+    </section>
+  </main>
+
+  <footer>
+    <button id="recheck" type="button">Kiểm tra lại</button>
+    <a id="release-link" href="#" target="_blank" rel="noreferrer">Release trên GitHub</a>
+  </footer>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
