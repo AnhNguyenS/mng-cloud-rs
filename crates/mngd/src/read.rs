@@ -13,8 +13,9 @@ use axum::{
     Json,
 };
 use mng_db::{
-    all_users, cloud_for_user, clouds_for_user, count_items, item_by_id, item_by_path, item_counts,
-    list_items, thumb_state_counts, Cloud, Item, ItemCount, ItemQuery, PublicUser, DEFAULT_LIMIT,
+    album_count, album_items, all_users, cloud_for_user, clouds_for_user, count_items, item_by_id,
+    item_by_path, item_counts, list_items, month_buckets, period_covers, thumb_state_counts,
+    year_buckets, AlbumKind, Cloud, Item, ItemCount, ItemQuery, PublicUser, DEFAULT_LIMIT,
     MAX_LIMIT, MAX_OFFSET,
 };
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,12 @@ pub struct ItemsParams {
 #[derive(Debug, Default, Deserialize)]
 pub struct CountsParams {
     cloud: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct TimelineParams {
+    cloud: Option<String>,
+    year: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,6 +129,35 @@ pub struct AdminUserDetail {
     counts: Vec<ItemCount>,
     clouds: Vec<Cloud>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct YearEntry {
+    year: i64,
+    count: i64,
+    covers: Vec<ItemView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonthEntry {
+    key: String,
+    year: i64,
+    month: i64,
+    label: String,
+    count: i64,
+    covers: Vec<ItemView>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlbumEntry {
+    key: String,
+    title: String,
+    sub: String,
+    count: i64,
+    covers: Vec<ItemView>,
+}
+
+/// The legacy UI shows at most four covers per timeline bucket or album.
+const COVER_LIMIT: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -361,6 +397,198 @@ pub async fn stats(
     }
 }
 
+/// Years that have at least one visible item with a capture date, newest
+/// first, with up to four covers each.
+pub async fn years(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    params: Result<Query<CountsParams>, QueryRejection>,
+) -> Response {
+    let Ok(Query(params)) = params else {
+        return invalid_query();
+    };
+    let cloud = match normalize_cloud(params.cloud) {
+        Ok(cloud) => cloud,
+        Err(response) => return response,
+    };
+    let owner_id = rbac::item_owner_id(&authenticated);
+    let filter_cloud = cloud.clone();
+
+    let result = read_db(&state, move |database| {
+        let conn = database.connect()?;
+        if let Some(cloud) = &filter_cloud {
+            if cloud_for_user(&conn, owner_id, cloud)?.is_none() {
+                return Ok(None);
+            }
+        }
+        let mut years = Vec::new();
+        for bucket in year_buckets(&conn, owner_id, filter_cloud.as_deref())? {
+            let covers = period_covers(
+                &conn,
+                owner_id,
+                filter_cloud.as_deref(),
+                bucket.year,
+                None,
+                COVER_LIMIT,
+            )?;
+            years.push(YearEntry {
+                year: bucket.year,
+                count: bucket.count,
+                covers: covers.iter().map(ItemView::from).collect(),
+            });
+        }
+        Ok(Some(years))
+    })
+    .await;
+
+    match result {
+        Ok(Some(years)) => Json(json!({
+            "ok": true,
+            "cloud": cloud,
+            "years": years,
+        }))
+        .into_response(),
+        Ok(None) => not_found("Thư viện không tồn tại."),
+        Err(response) => response,
+    }
+}
+
+/// Months in the timeline, newest first. `year` limits the result to one year.
+pub async fn months(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    params: Result<Query<TimelineParams>, QueryRejection>,
+) -> Response {
+    let Ok(Query(params)) = params else {
+        return invalid_query();
+    };
+    let cloud = match normalize_cloud(params.cloud) {
+        Ok(cloud) => cloud,
+        Err(response) => return response,
+    };
+    let year = match normalize_year(params.year) {
+        Ok(year) => year,
+        Err(response) => return response,
+    };
+    let owner_id = rbac::item_owner_id(&authenticated);
+    let filter_cloud = cloud.clone();
+
+    let result = read_db(&state, move |database| {
+        let conn = database.connect()?;
+        if let Some(cloud) = &filter_cloud {
+            if cloud_for_user(&conn, owner_id, cloud)?.is_none() {
+                return Ok(None);
+            }
+        }
+        let mut months = Vec::new();
+        for bucket in month_buckets(&conn, owner_id, filter_cloud.as_deref(), year)? {
+            let covers = period_covers(
+                &conn,
+                owner_id,
+                filter_cloud.as_deref(),
+                bucket.year,
+                Some(bucket.month),
+                COVER_LIMIT,
+            )?;
+            months.push(MonthEntry {
+                key: bucket.key,
+                year: bucket.year,
+                month: bucket.month,
+                label: month_label(bucket.month, bucket.year),
+                count: bucket.count,
+                covers: covers.iter().map(ItemView::from).collect(),
+            });
+        }
+        Ok(Some(months))
+    })
+    .await;
+
+    match result {
+        Ok(Some(months)) => Json(json!({
+            "ok": true,
+            "cloud": cloud,
+            "year": year,
+            "months": months,
+        }))
+        .into_response(),
+        Ok(None) => not_found("Thư viện không tồn tại."),
+        Err(response) => response,
+    }
+}
+
+/// Fixed albums followed by one album per capture year, matching the legacy
+/// payload. Empty non-`all` albums are omitted.
+pub async fn albums(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    params: Result<Query<CountsParams>, QueryRejection>,
+) -> Response {
+    let Ok(Query(params)) = params else {
+        return invalid_query();
+    };
+    let cloud = match normalize_cloud(params.cloud) {
+        Ok(cloud) => cloud,
+        Err(response) => return response,
+    };
+    let owner_id = rbac::item_owner_id(&authenticated);
+    let filter_cloud = cloud.clone();
+
+    let result = read_db(&state, move |database| {
+        let conn = database.connect()?;
+        if let Some(cloud) = &filter_cloud {
+            if cloud_for_user(&conn, owner_id, cloud)?.is_none() {
+                return Ok(None);
+            }
+        }
+        let mut albums = Vec::new();
+        for kind in AlbumKind::ALL {
+            let (title, sub) = album_labels(kind);
+            let count = album_count(&conn, owner_id, filter_cloud.as_deref(), kind)?;
+            if count == 0 && kind != AlbumKind::All {
+                continue;
+            }
+            let covers = album_items(&conn, owner_id, filter_cloud.as_deref(), kind, COVER_LIMIT)?;
+            albums.push(AlbumEntry {
+                key: kind.key().to_owned(),
+                title: title.to_owned(),
+                sub: sub.to_owned(),
+                count,
+                covers: covers.iter().map(ItemView::from).collect(),
+            });
+        }
+        for bucket in year_buckets(&conn, owner_id, filter_cloud.as_deref())? {
+            let covers = period_covers(
+                &conn,
+                owner_id,
+                filter_cloud.as_deref(),
+                bucket.year,
+                None,
+                COVER_LIMIT,
+            )?;
+            albums.push(AlbumEntry {
+                key: format!("year:{}", bucket.year),
+                title: format!("Năm {}", bucket.year),
+                sub: format!("{} mục", bucket.count),
+                count: bucket.count,
+                covers: covers.iter().map(ItemView::from).collect(),
+            });
+        }
+        Ok(Some(albums))
+    })
+    .await;
+
+    match result {
+        Ok(Some(albums)) => Json(json!({
+            "ok": true,
+            "cloud": cloud,
+            "albums": albums,
+        }))
+        .into_response(),
+        Ok(None) => not_found("Thư viện không tồn tại."),
+        Err(response) => response,
+    }
+}
+
 /// Administrative metadata. This lists every account and its aggregate counts
 /// but never returns another owner's item rows or password hashes.
 pub async fn admin_users(
@@ -491,6 +719,53 @@ fn normalize_cloud(cloud: Option<String>) -> Result<Option<String>, Response> {
     Ok(Some(cloud.to_owned()))
 }
 
+#[allow(clippy::result_large_err)]
+fn normalize_year(year: Option<String>) -> Result<Option<i64>, Response> {
+    let Some(year) = year else {
+        return Ok(None);
+    };
+    let year = year.trim();
+    if year.is_empty() {
+        return Ok(None);
+    }
+    if year.len() > 4 || !year.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid_query());
+    }
+    let year: i64 = year.parse().map_err(|_| invalid_query())?;
+    if !(1..=9999).contains(&year) {
+        return Err(invalid_query());
+    }
+    Ok(Some(year))
+}
+
+fn month_label(month: i64, year: i64) -> String {
+    match month {
+        1 => format!("Tháng 1 {year}"),
+        2 => format!("Tháng 2 {year}"),
+        3 => format!("Tháng 3 {year}"),
+        4 => format!("Tháng 4 {year}"),
+        5 => format!("Tháng 5 {year}"),
+        6 => format!("Tháng 6 {year}"),
+        7 => format!("Tháng 7 {year}"),
+        8 => format!("Tháng 8 {year}"),
+        9 => format!("Tháng 9 {year}"),
+        10 => format!("Tháng 10 {year}"),
+        11 => format!("Tháng 11 {year}"),
+        12 => format!("Tháng 12 {year}"),
+        _ => format!("{month} {year}"),
+    }
+}
+
+fn album_labels(kind: AlbumKind) -> (&'static str, &'static str) {
+    match kind {
+        AlbumKind::All => ("Tất cả", "Toàn bộ thư viện"),
+        AlbumKind::Favorites => ("Yêu thích", "Ảnh và video đã thích"),
+        AlbumKind::Videos => ("Video", "Tất cả video"),
+        AlbumKind::Live => ("Live Photo", "Ảnh có chuyển động"),
+        AlbumKind::Screenshots => ("Ảnh chụp màn hình", "Screenshot"),
+    }
+}
+
 fn totals(counts: &[ItemCount]) -> (i64, i64) {
     counts.iter().fold((0, 0), |(total, bytes), row| {
         (total + row.count, bytes + row.bytes)
@@ -559,6 +834,22 @@ mod tests {
         .await
     }
 
+    fn ids(value: &serde_json::Value) -> Vec<i64> {
+        value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_i64().unwrap())
+            .collect()
+    }
+
+    fn album_keys(albums: &[serde_json::Value]) -> Vec<&str> {
+        albums
+            .iter()
+            .map(|album| album["key"].as_str().unwrap())
+            .collect()
+    }
+
     #[tokio::test]
     async fn read_endpoints_require_a_session() {
         let fixture = fixture(true, true, 5);
@@ -568,6 +859,9 @@ mod tests {
             "/api/v1/counts",
             "/api/v1/items",
             "/api/v1/items/1",
+            "/api/v1/years",
+            "/api/v1/months",
+            "/api/v1/albums",
             "/api/v1/stats",
             "/api/v1/admin/users",
         ] {
@@ -691,6 +985,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn timeline_and_albums_are_owner_and_cloud_scoped() {
+        let fixture = fixture(true, true, 5);
+        let alice = session_cookie(&fixture, "alice").await;
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/years").await;
+        assert_eq!(status, StatusCode::OK);
+        let years = body["years"].as_array().unwrap();
+        assert_eq!(years.len(), 1);
+        assert_eq!(years[0]["year"], 1970);
+        assert_eq!(years[0]["count"], 5);
+        assert_eq!(ids(&years[0]["covers"]), vec![9, 7, 3, 2]);
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/years?cloud=seafile").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["years"][0]["count"], 4);
+        assert_eq!(ids(&body["years"][0]["covers"]), vec![9, 7, 2, 1]);
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months").await;
+        assert_eq!(status, StatusCode::OK);
+        let months = body["months"].as_array().unwrap();
+        assert_eq!(months.len(), 1);
+        assert_eq!(months[0]["key"], "1970-01");
+        assert_eq!(months[0]["year"], 1970);
+        assert_eq!(months[0]["month"], 1);
+        assert_eq!(months[0]["label"], "Tháng 1 1970");
+        assert_eq!(months[0]["count"], 5);
+        assert_eq!(ids(&months[0]["covers"]), vec![9, 7, 3, 2]);
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months?year=1970").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["year"], 1970);
+        assert_eq!(body["months"].as_array().unwrap().len(), 1);
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months?year=1971").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["months"].as_array().unwrap().is_empty());
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months?year=").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["months"].as_array().unwrap().len(), 1);
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months?year=abcd").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_query");
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/albums").await;
+        assert_eq!(status, StatusCode::OK);
+        let albums = body["albums"].as_array().unwrap();
+        assert_eq!(
+            album_keys(albums),
+            vec!["all", "favorites", "videos", "live", "year:1970"]
+        );
+        assert_eq!(albums[0]["count"], 5);
+        assert_eq!(ids(&albums[0]["covers"]), vec![9, 7, 3, 2]);
+        assert_eq!(albums[1]["count"], 1);
+        assert_eq!(ids(&albums[1]["covers"]), vec![1]);
+        assert_eq!(albums[2]["count"], 1);
+        assert_eq!(ids(&albums[2]["covers"]), vec![2]);
+        assert_eq!(albums[3]["count"], 1);
+        assert_eq!(ids(&albums[3]["covers"]), vec![9]);
+        assert_eq!(albums[4]["title"], "Năm 1970");
+        assert_eq!(albums[4]["sub"], "5 mục");
+        assert_eq!(albums[4]["count"], 5);
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/albums?cloud=seafile").await;
+        assert_eq!(status, StatusCode::OK);
+        let albums = body["albums"].as_array().unwrap();
+        assert_eq!(
+            album_keys(albums),
+            vec!["all", "favorites", "videos", "live", "year:1970"]
+        );
+        assert_eq!(albums[0]["count"], 4);
+        assert_eq!(ids(&albums[0]["covers"]), vec![9, 7, 2, 1]);
+        assert_eq!(albums[4]["count"], 4);
+        assert_eq!(ids(&albums[4]["covers"]), vec![9, 7, 2, 1]);
+
+        let bob = session_cookie(&fixture, "bob").await;
+        for uri in [
+            "/api/v1/years?cloud=nextcloud",
+            "/api/v1/months?cloud=nextcloud",
+            "/api/v1/albums?cloud=nextcloud",
+        ] {
+            let (status, _, body) = get(&fixture, &bob, uri).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+            assert_eq!(body["error"], "not_found", "{uri}");
+        }
+
+        let (status, _, body) = get(&fixture, &bob, "/api/v1/years").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["years"][0]["count"], 1);
+        assert_eq!(ids(&body["years"][0]["covers"]), vec![4]);
+
+        let (status, _, body) = get(&fixture, &bob, "/api/v1/albums").await;
+        assert_eq!(status, StatusCode::OK);
+        let albums = body["albums"].as_array().unwrap();
+        assert_eq!(album_keys(albums), vec!["all", "year:1970"]);
+        assert_eq!(albums[0]["count"], 1);
+        assert_eq!(ids(&albums[0]["covers"]), vec![4]);
+    }
+
+    #[tokio::test]
     async fn admin_routes_require_the_admin_role() {
         let fixture = fixture(true, true, 5);
         let bob = session_cookie(&fixture, "bob").await;
@@ -760,6 +1155,14 @@ mod tests {
         assert_eq!(body["error"], "invalid_query");
 
         let (status, _, body) = get(&fixture, &alice, "/api/v1/items?cloud=../etc").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_query");
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months?year=0").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid_query");
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/months?year=10000").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid_query");
 

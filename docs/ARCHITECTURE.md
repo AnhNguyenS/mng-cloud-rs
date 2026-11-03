@@ -114,6 +114,9 @@ GET  /api/v1/clouds           libraries owned by the session user
 GET  /api/v1/counts           grouped photo/video counts (optional cloud)
 GET  /api/v1/items            filters: cloud, type, favorite, limit, offset
 GET  /api/v1/items/{id}       one item plus its Live Photo companion
+GET  /api/v1/years            capture-year buckets with up to four covers
+GET  /api/v1/months           capture-month buckets (optional year, cloud)
+GET  /api/v1/albums           fixed albums plus one album per capture year
 GET  /api/v1/stats            owner counters and thumbnail-state counts
 GET  /api/v1/admin/users      all accounts and aggregate counts (admin only)
 GET  /api/v1/admin/users/{id} one account, libraries and counts (admin only)

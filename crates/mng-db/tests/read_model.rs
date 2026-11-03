@@ -1,6 +1,8 @@
 use mng_db::{
-    all_users, cloud_for_user, clouds_for_user, count_items, item_by_id, item_counts, list_items,
-    thumb_state_counts, user_by_id, user_by_username, Database, ItemQuery, OpenMode,
+    album_count, album_items, all_users, cloud_for_user, clouds_for_user, count_items, item_by_id,
+    item_counts, list_items, month_buckets, period_covers, thumb_state_counts, user_by_id,
+    user_by_username, year_buckets, AlbumKind, Database, ItemQuery, MonthBucket, OpenMode,
+    YearBucket,
 };
 use rusqlite::{params, Connection};
 
@@ -144,6 +146,13 @@ fn seeded() -> Connection {
         )
         .unwrap();
     }
+    conn.execute(
+        "INSERT INTO items (id, owner_id, cloud, path, name, stem, ext, media_type, size, \
+         taken_at, live) VALUES (9, 1, 'seafile', '/live.heic', 'live.heic', 'live.heic', 'heic', \
+         'photo', 900, 900, 1)",
+        [],
+    )
+    .unwrap();
     conn
 }
 
@@ -185,8 +194,8 @@ fn counts_exclude_deleted_hidden_and_other_owners() {
         .iter()
         .find(|row| row.cloud == "seafile" && row.media_type == "photo")
         .unwrap();
-    assert_eq!(seafile_photo.count, 2);
-    assert_eq!(seafile_photo.bytes, 800);
+    assert_eq!(seafile_photo.count, 3);
+    assert_eq!(seafile_photo.bytes, 1700);
     let seafile_video = counts
         .iter()
         .find(|row| row.cloud == "seafile" && row.media_type == "video")
@@ -203,7 +212,7 @@ fn counts_exclude_deleted_hidden_and_other_owners() {
         vec![
             mng_db::ThumbStateCount {
                 thumb_state: 0,
-                count: 4
+                count: 5
             },
             mng_db::ThumbStateCount {
                 thumb_state: 3,
@@ -219,7 +228,7 @@ fn list_items_orders_filters_and_paginates() {
     let all = list_items(&conn, 1, &ItemQuery::default()).unwrap();
     assert_eq!(
         all.iter().map(|item| item.id).collect::<Vec<_>>(),
-        vec![7, 3, 2, 1]
+        vec![9, 7, 3, 2, 1]
     );
 
     let page = list_items(
@@ -234,7 +243,7 @@ fn list_items_orders_filters_and_paginates() {
     .unwrap();
     assert_eq!(
         page.iter().map(|item| item.id).collect::<Vec<_>>(),
-        vec![3, 2]
+        vec![7, 3]
     );
 
     let seafile_photos = list_items(
@@ -252,7 +261,7 @@ fn list_items_orders_filters_and_paginates() {
             .iter()
             .map(|item| item.id)
             .collect::<Vec<_>>(),
-        vec![7, 1]
+        vec![9, 7, 1]
     );
 
     let favorites = list_items(
@@ -276,7 +285,7 @@ fn list_items_orders_filters_and_paginates() {
         },
     )
     .unwrap();
-    assert_eq!(clamped.len(), 4);
+    assert_eq!(clamped.len(), 5);
 }
 
 #[test]
@@ -298,7 +307,7 @@ fn item_lookup_never_crosses_owner_boundary() {
 fn counts_match_the_listing_filters() {
     let conn = seeded();
     let all = ItemQuery::default();
-    assert_eq!(count_items(&conn, 1, &all).unwrap(), 4);
+    assert_eq!(count_items(&conn, 1, &all).unwrap(), 5);
 
     let favorites = ItemQuery {
         favorite: Some(true),
@@ -318,8 +327,8 @@ fn counts_match_the_listing_filters() {
         live: Some(true),
         ..Default::default()
     };
-    assert_eq!(count_items(&conn, 1, &live).unwrap(), 0);
-    assert_eq!(count_items(&conn, 1, &all).unwrap(), 4);
+    assert_eq!(count_items(&conn, 1, &live).unwrap(), 1);
+    assert_eq!(count_items(&conn, 1, &all).unwrap(), 5);
 }
 
 #[test]
@@ -333,6 +342,97 @@ fn all_users_preserves_password_hashes_for_auth_only() {
     assert_eq!(users[0].password_hash, "$2y$10$hash");
     assert!(users[0].is_admin);
     assert!(!users[1].is_admin);
+}
+
+#[test]
+fn timeline_buckets_and_covers_are_owner_and_cloud_scoped() {
+    let conn = seeded();
+
+    assert_eq!(
+        year_buckets(&conn, 1, None).unwrap(),
+        vec![YearBucket {
+            year: 1970,
+            count: 5
+        }]
+    );
+    assert_eq!(
+        year_buckets(&conn, 1, Some("seafile")).unwrap(),
+        vec![YearBucket {
+            year: 1970,
+            count: 4
+        }]
+    );
+    assert!(year_buckets(&conn, 2, Some("nextcloud"))
+        .unwrap()
+        .is_empty());
+
+    assert_eq!(
+        month_buckets(&conn, 1, None, None).unwrap(),
+        vec![MonthBucket {
+            key: "1970-01".to_owned(),
+            year: 1970,
+            month: 1,
+            count: 5
+        }]
+    );
+    assert_eq!(month_buckets(&conn, 1, None, Some(1970)).unwrap().len(), 1);
+    assert!(month_buckets(&conn, 1, None, Some(1971))
+        .unwrap()
+        .is_empty());
+
+    let covers = period_covers(&conn, 1, Some("seafile"), 1970, Some(1), 4).unwrap();
+    assert_eq!(
+        covers.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![9, 7, 2, 1]
+    );
+    assert!(period_covers(&conn, 1, None, 1970, Some(1), 4)
+        .unwrap()
+        .iter()
+        .all(|item| item.cloud != "nextcloud" || item.id == 3));
+    assert!(period_covers(&conn, 2, Some("seafile"), 1970, None, 4)
+        .unwrap()
+        .iter()
+        .all(|item| item.owner_id == 2));
+}
+
+#[test]
+fn album_predicates_are_fixed_and_owner_scoped() {
+    let conn = seeded();
+
+    assert_eq!(album_count(&conn, 1, None, AlbumKind::All).unwrap(), 5);
+    assert_eq!(
+        album_count(&conn, 1, Some("seafile"), AlbumKind::All).unwrap(),
+        4
+    );
+    assert_eq!(
+        album_count(&conn, 1, None, AlbumKind::Favorites).unwrap(),
+        1
+    );
+    assert_eq!(album_count(&conn, 1, None, AlbumKind::Videos).unwrap(), 1);
+    assert_eq!(album_count(&conn, 1, None, AlbumKind::Live).unwrap(), 1);
+    assert_eq!(
+        album_count(&conn, 1, None, AlbumKind::Screenshots).unwrap(),
+        0
+    );
+    assert_eq!(album_count(&conn, 2, None, AlbumKind::All).unwrap(), 1);
+
+    let videos = album_items(&conn, 1, None, AlbumKind::Videos, 4).unwrap();
+    assert_eq!(videos.len(), 1);
+    assert_eq!(videos[0].id, 2);
+
+    let live = album_items(&conn, 1, Some("seafile"), AlbumKind::Live, 4).unwrap();
+    assert_eq!(live.len(), 1);
+    assert_eq!(live[0].id, 9);
+
+    let all = album_items(&conn, 1, None, AlbumKind::All, 4).unwrap();
+    assert_eq!(
+        all.iter().map(|item| item.id).collect::<Vec<_>>(),
+        vec![9, 7, 3, 2]
+    );
+    assert!(album_items(&conn, 3, None, AlbumKind::All, 4)
+        .unwrap()
+        .iter()
+        .all(|item| item.owner_id == 3));
 }
 
 #[test]

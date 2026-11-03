@@ -5,7 +5,9 @@ use std::{
 
 use rusqlite::{params, params_from_iter, types::Value, Connection, OpenFlags, Row};
 
-use crate::model::{Cloud, Item, ItemCount, ItemQuery, ThumbStateCount, User};
+use crate::model::{
+    AlbumKind, Cloud, Item, ItemCount, ItemQuery, MonthBucket, ThumbStateCount, User, YearBucket,
+};
 
 pub const DEFAULT_LIMIT: u32 = 100;
 pub const MAX_LIMIT: u32 = 500;
@@ -185,6 +187,162 @@ pub fn thumb_state_counts(conn: &Connection, owner_id: i64) -> Result<Vec<ThumbS
     })?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
+}
+
+/// Years that contain at least one visible item with a capture date.
+pub fn year_buckets(
+    conn: &Connection,
+    owner_id: i64,
+    cloud: Option<&str>,
+) -> Result<Vec<YearBucket>> {
+    let (filter, args) = timeline_filter(owner_id, cloud);
+    let sql = format!(
+        "SELECT CAST(strftime('%Y', taken_at, 'unixepoch') AS INTEGER) AS year, COUNT(*) \
+         FROM items WHERE {filter} GROUP BY year ORDER BY year DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), |row| {
+        Ok(YearBucket {
+            year: row.get(0)?,
+            count: row.get(1)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+/// Months that contain at least one visible item with a capture date. When
+/// `year` is set, only that year is returned.
+pub fn month_buckets(
+    conn: &Connection,
+    owner_id: i64,
+    cloud: Option<&str>,
+    year: Option<i64>,
+) -> Result<Vec<MonthBucket>> {
+    let (filter, mut args) = timeline_filter(owner_id, cloud);
+    let mut sql = format!(
+        "SELECT strftime('%Y-%m', taken_at, 'unixepoch') AS key, \
+                CAST(strftime('%Y', taken_at, 'unixepoch') AS INTEGER) AS year, \
+                CAST(strftime('%m', taken_at, 'unixepoch') AS INTEGER) AS month, \
+                COUNT(*) \
+         FROM items WHERE {filter}"
+    );
+    if let Some(year) = year {
+        args.push(Value::Text(format!("{year:04}")));
+        sql.push_str(&format!(
+            " AND strftime('%Y', taken_at, 'unixepoch') = ?{}",
+            args.len()
+        ));
+    }
+    sql.push_str(" GROUP BY key ORDER BY key DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), |row| {
+        Ok(MonthBucket {
+            key: row.get(0)?,
+            year: row.get(1)?,
+            month: row.get(2)?,
+            count: row.get(3)?,
+        })
+    })?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+/// Newest items for a year (`month = None`) or a `YYYY-MM` month.
+pub fn period_covers(
+    conn: &Connection,
+    owner_id: i64,
+    cloud: Option<&str>,
+    year: i64,
+    month: Option<i64>,
+    limit: u32,
+) -> Result<Vec<Item>> {
+    let (filter, mut args) = timeline_filter(owner_id, cloud);
+    let mut sql = format!("SELECT {ITEM_COLUMNS} FROM items WHERE {filter}");
+    let period = match month {
+        Some(month) => format!("{year:04}-{month:02}"),
+        None => format!("{year:04}"),
+    };
+    if month.is_some() {
+        args.push(Value::Text(period));
+        sql.push_str(&format!(
+            " AND strftime('%Y-%m', taken_at, 'unixepoch') = ?{}",
+            args.len()
+        ));
+    } else {
+        args.push(Value::Text(period));
+        sql.push_str(&format!(
+            " AND strftime('%Y', taken_at, 'unixepoch') = ?{}",
+            args.len()
+        ));
+    }
+    let limit = limit.clamp(1, MAX_LIMIT);
+    args.push(i64::from(limit).into());
+    sql.push_str(&format!(
+        " ORDER BY taken_at DESC, id DESC LIMIT ?{}",
+        args.len()
+    ));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), item_from_row)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+pub fn album_count(
+    conn: &Connection,
+    owner_id: i64,
+    cloud: Option<&str>,
+    album: AlbumKind,
+) -> Result<i64> {
+    let (filter, args) = album_filter(owner_id, cloud);
+    let sql = format!(
+        "SELECT COUNT(*) FROM items WHERE {filter} AND {}",
+        album.predicate()
+    );
+    conn.query_row(&sql, params_from_iter(args.iter()), |row| row.get(0))
+        .map_err(Error::from)
+}
+
+pub fn album_items(
+    conn: &Connection,
+    owner_id: i64,
+    cloud: Option<&str>,
+    album: AlbumKind,
+    limit: u32,
+) -> Result<Vec<Item>> {
+    let (filter, mut args) = album_filter(owner_id, cloud);
+    let limit = limit.clamp(1, MAX_LIMIT);
+    args.push(i64::from(limit).into());
+    let sql = format!(
+        "SELECT {ITEM_COLUMNS} FROM items WHERE {filter} AND {} \
+         ORDER BY taken_at DESC, id DESC LIMIT ?{}",
+        album.predicate(),
+        args.len()
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter()), item_from_row)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+fn timeline_filter(owner_id: i64, cloud: Option<&str>) -> (String, Vec<Value>) {
+    let mut filter = String::from("owner_id = ?1 AND deleted = 0 AND hidden = 0 AND taken_at > 0");
+    let mut args: Vec<Value> = vec![owner_id.into()];
+    if let Some(cloud) = cloud {
+        args.push(Value::Text(cloud.to_owned()));
+        filter.push_str(&format!(" AND cloud = ?{}", args.len()));
+    }
+    (filter, args)
+}
+
+fn album_filter(owner_id: i64, cloud: Option<&str>) -> (String, Vec<Value>) {
+    let mut filter = String::from("owner_id = ?1 AND deleted = 0 AND hidden = 0");
+    let mut args: Vec<Value> = vec![owner_id.into()];
+    if let Some(cloud) = cloud {
+        args.push(Value::Text(cloud.to_owned()));
+        filter.push_str(&format!(" AND cloud = ?{}", args.len()));
+    }
+    (filter, args)
 }
 
 pub fn list_items(conn: &Connection, owner_id: i64, query: &ItemQuery) -> Result<Vec<Item>> {

@@ -119,6 +119,62 @@ pub struct ThumbStateCount {
     pub count: i64,
 }
 
+/// One year in the timeline. Items without a capture date are excluded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct YearBucket {
+    pub year: i64,
+    pub count: i64,
+}
+
+/// One month in the timeline. `key` is `YYYY-MM`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonthBucket {
+    pub key: String,
+    pub year: i64,
+    pub month: i64,
+    pub count: i64,
+}
+
+/// Fixed album predicates. The SQL is static; callers cannot inject a filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlbumKind {
+    All,
+    Favorites,
+    Videos,
+    Live,
+    Screenshots,
+}
+
+impl AlbumKind {
+    pub const ALL: [Self; 5] = [
+        Self::All,
+        Self::Favorites,
+        Self::Videos,
+        Self::Live,
+        Self::Screenshots,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Favorites => "favorites",
+            Self::Videos => "videos",
+            Self::Live => "live",
+            Self::Screenshots => "screenshots",
+        }
+    }
+
+    pub(crate) fn predicate(self) -> &'static str {
+        match self {
+            Self::All => "1=1",
+            Self::Favorites => "favorite = 1",
+            Self::Videos => "media_type = 'video'",
+            Self::Live => "live = 1",
+            Self::Screenshots => "(name LIKE 'Screenshot%' OR name LIKE 'Screen_%')",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ItemQuery {
     pub cloud: Option<String>,
