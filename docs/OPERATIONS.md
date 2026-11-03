@@ -380,7 +380,8 @@ The canary is installed but **not exposed through nginx** yet:
 
 - user: `mng` (system account, no login shell)
 - binary: `/usr/local/bin/mngd` (auth + RBAC + read API)
-- app: `/var/www/mng-cloud-app/releases/0.1.3` (`current` symlink)
+- app: `/var/www/mng-cloud-app/releases/0.1.4` (`current` symlink,
+  directories `0555`, files `0444`)
 - config: `/etc/mng-cloud/mngd.toml`
 - session key: `/etc/mng-cloud/session.key` (`root:mng`, `0440`)
 - database: `/run/mng-cloud-snapshot/mng-cloud.sqlite` (`mng`, `0440`,
@@ -397,9 +398,12 @@ touching a real account. Unauthenticated requests to `/api/v1/bootstrap`,
 `401 auth_required`; the read routes are live on the loopback canary but not
 exposed through nginx.
 
-The local signed release is `0.1.4` (sequence 4); production still serves
-`0.1.3` until the next app deploy. The PHP tree and the existing nginx vhost are
-untouched. `/app/` and `/api/v1/*` are not public until nginx locations are
+The signed app is `0.1.4` (sequence 4). Its metadata is published at
+`https://anhnguyens.github.io/mng-cloud-rs/releases/current/` and every signed
+asset hash was compared with
+`/var/www/mng-cloud-app/releases/0.1.4` after deployment. The PHP tree and the
+existing nginx vhost are untouched. `https://anh-cloud.duckdns.org/app/` still
+returns 404: `/app/` and `/api/v1/*` are not public until nginx locations are
 added deliberately.
 
 Rollback point for this canary:
