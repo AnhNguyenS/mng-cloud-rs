@@ -59,15 +59,15 @@ jobs:
           rm -f dist/app/assets/wasm/.gitignore dist/app/assets/wasm/package.json dist/app/assets/wasm/mng_wasm.d.ts
           cargo build -p mng-sign --release
           cp target/release/mng-sign dist/mng-sign
-          cat > dist/SIGNING-REQUIRED.txt <<'EOF'
-This build is UNSIGNED. Do not deploy dist/app as-is.
-
-On the offline signing machine run:
-  mng-sign package --web dist/app --out signed/app --version <version> --key <offline-key>
-
-The package command stamps sw.js, writes manifest.json/manifest.sig and
-refuses to use a key that is present on the server.
-EOF
+          printf '%s\n' \
+            'This build is UNSIGNED. Do not deploy dist/app as-is.' \
+            '' \
+            'On the offline signing machine run:' \
+            '  mng-sign package --web dist/app --out signed/app --version <version> --key <offline-key>' \
+            '' \
+            'The package command stamps sw.js, writes manifest.json/manifest.sig and' \
+            'refuses to use a key that is present on the server.' \
+            > dist/SIGNING-REQUIRED.txt
       - uses: actions/upload-artifact@v4
         with:
           name: web
