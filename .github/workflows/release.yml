@@ -1,0 +1,111 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  armv7:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+          targets: armv7-unknown-linux-musleabihf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-armv7
+      - run: cargo build -p mngd --release --target armv7-unknown-linux-musleabihf
+      - run: |
+          mkdir -p dist
+          cp target/armv7-unknown-linux-musleabihf/release/mngd dist/mngd
+          sha256sum dist/mngd > dist/mngd.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: armv7
+          path: dist/
+          if-no-files-found: error
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-web
+      - uses: taiki-e/install-action@wasm-pack
+      - run: |
+          mkdir -p dist
+          wasm-pack build crates/mng-wasm --release --target web --out-dir ../../dist/wasm
+          cp -r web dist/app
+          mkdir -p dist/app/assets/wasm
+          cp -r dist/wasm/. dist/app/assets/wasm/
+          rm -f dist/app/assets/wasm/.gitignore dist/app/assets/wasm/package.json dist/app/assets/wasm/mng_wasm.d.ts
+          cargo build -p mng-sign --release
+          cp target/release/mng-sign dist/mng-sign
+          cat > dist/SIGNING-REQUIRED.txt <<'EOF'
+This build is UNSIGNED. Do not deploy dist/app as-is.
+
+On the offline signing machine run:
+  mng-sign package --web dist/app --out signed/app --version <version> --key <offline-key>
+
+The package command stamps sw.js, writes manifest.json/manifest.sig and
+refuses to use a key that is present on the server.
+EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: dist/
+          if-no-files-found: error
+
+  windows-signer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-signer-windows
+      - run: cargo build -p mng-sign --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-signer
+          path: target/release/mng-sign.exe
+          if-no-files-found: error
+
+  publish:
+    needs: [armv7, web, windows-signer]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - run: |
+          tar -czf "mng-cloud-${GITHUB_REF_NAME}-build.tar.gz" -C release .
+          sha256sum "mng-cloud-${GITHUB_REF_NAME}-build.tar.gz" > "mng-cloud-${GITHUB_REF_NAME}-build.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mng-cloud-${{ github.ref_name }}-build.tar.gz
+            mng-cloud-${{ github.ref_name }}-build.tar.gz.sha256
+          body: |
+            Unsigned build artifacts for `${{ github.ref_name }}`.
+
+            `app/` is the web template. Sign it offline with `mng-sign package`
+            before deployment. The private signing key is never present in CI.
+            Verify `mngd` with the attached SHA-256 before installing.

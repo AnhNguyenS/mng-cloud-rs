@@ -1,0 +1,15 @@
+/target
+/dist
+/artifacts
+/web/assets/wasm/
+*.pdb
+.DS_Store
+Thumbs.db
+
+# Signing material must never enter the repository.
+/keys-private/
+/secrets/
+signing-key*.json
+*.key
+*.pem
+bundle-pass*.txt

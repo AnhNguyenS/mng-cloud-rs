@@ -1,0 +1,4 @@
+# ARMv7 builds are fully static and must not need a cross C toolchain.
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes"]

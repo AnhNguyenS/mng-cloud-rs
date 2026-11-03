@@ -1,0 +1,21 @@
+{
+  "name": "MNG Cloud",
+  "short_name": "MNG",
+  "description": "Client-side encrypted cloud backed by Seafile",
+  "id": "/app/",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080b10",
+  "theme_color": "#080b10",
+  "lang": "vi",
+  "icons": [
+    {
+      "src": "/app/assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

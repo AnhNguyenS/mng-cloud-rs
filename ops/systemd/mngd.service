@@ -1,0 +1,46 @@
+[Unit]
+Description=MNG Cloud native edge (mngd)
+Documentation=https://github.com/your-org/mng-cloud-rs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mng
+Group=mng
+UMask=0027
+ExecStart=/usr/local/bin/mngd --config /etc/mng-cloud/mngd.toml
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+
+# Read-only application tree, writable state only below /var/lib/mng-cloud.
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/www/mng-cloud-app /etc/mng-cloud
+ReadWritePaths=/var/lib/mng-cloud
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

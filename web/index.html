@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="mng-version" content="__MNG_VERSION__">
+  <title>MNG Cloud</title>
+  <link rel="manifest" href="/app/manifest.webmanifest">
+  <link rel="icon" href="/app/assets/icon.svg?v=__MNG_VERSION__" type="image/svg+xml">
+  <link rel="stylesheet" href="/app/assets/app.css?v=__MNG_VERSION__">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/app/" aria-label="MNG Cloud">
+      <img src="/app/assets/icon.svg?v=__MNG_VERSION__" alt="" width="28" height="28">
+      <span>MNG Cloud</span>
+    </a>
+    <span class="version" id="version">dev</span>
+  </header>
+
+  <main class="shell">
+    <section class="hero" aria-labelledby="title">
+      <p class="eyebrow">Native core · Rust / WebAssembly</p>
+      <h1 id="title">Dữ liệu của bạn,<br>khóa nằm trong trình duyệt.</h1>
+      <p class="lede">Lớp giao diện chạy JavaScript. Mã hóa, giải mã và xử lý khối chạy trong engine Rust/WASM đã ký.</p>
+    </section>
+
+    <section class="card" aria-labelledby="status-title">
+      <div class="card-head">
+        <h2 id="status-title">Trạng thái dịch vụ</h2>
+        <span class="dot" id="status-dot" aria-hidden="true"></span>
+      </div>
+      <p id="status" role="status" aria-live="polite">Đang kiểm tra…</p>
+      <dl class="facts">
+        <div><dt>Phiên bản shell</dt><dd id="shell-version">—</dd></div>
+        <div><dt>Service worker</dt><dd id="worker-state">—</dd></div>
+        <div><dt>Kết nối</dt><dd id="network-state">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="grid" aria-label="Nguyên tắc bảo vệ">
+      <article class="tile">
+        <h3>E2EE trong WASM</h3>
+        <p>Mật khẩu thư viện và khóa dẫn xuất không đi qua server. Engine Rust giữ khóa trong bộ nhớ và xóa khi đóng phiên.</p>
+      </article>
+      <article class="tile">
+        <h3>Cập nhật có chữ ký</h3>
+        <p>Manifest và từng asset được xác minh bằng khóa P-256 ghim sẵn trước khi đưa vào cache.</p>
+      </article>
+      <article class="tile">
+        <h3>Frontend bất biến</h3>
+        <p>Tiến trình PHP không có quyền ghi vào thư mục giao diện. Mỗi bản phát hành là một thư mục chỉ đọc.</p>
+      </article>
+    </section>
+
+    <section class="banner" id="update-banner" hidden aria-live="polite">
+      <div>
+        <strong>Có bản cập nhật đã ký.</strong>
+        <span id="update-version"></span>
+      </div>
+      <button type="button" id="update-button">Cập nhật</button>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Seafile storage · Rust edge · WASM E2EE</span>
+    <a href="/app/manifest.webmanifest">Manifest</a>
+  </footer>
+
+  <script type="module" src="/app/assets/app.js?v=__MNG_VERSION__"></script>
+</body>
+</html>
