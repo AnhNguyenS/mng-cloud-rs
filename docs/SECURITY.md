@@ -76,6 +76,25 @@ but cannot recover plaintext without the user's password.
   closed with `503`; the static PWA and health probes remain available.
 - `last_login_at` is not written while SQLite is opened read-only.
 
+## Authorization
+
+- Authentication answers *who* is calling; authorization uses the `users` row
+  loaded on that same request. The cookie carries the uid but never the role,
+  so demoting an admin or deactivating an account takes effect on the next
+  request instead of waiting for session expiry.
+- `/api/v1/items`, `/api/v1/counts`, `/api/v1/clouds`, `/api/v1/bootstrap` and
+  `/api/v1/stats` are constrained to `owner_id = session user`. A `cloud`
+  parameter must be present in that user's `user_clouds` rows.
+- A missing, unowned or unknown library returns `404`; it never returns `403`
+  with a name, so one user cannot enumerate another user's library keys.
+- `/api/v1/admin/users` and `/api/v1/admin/users/{id}` require the admin role.
+  Admin access is limited to account and aggregate metadata. It does **not**
+  grant access to another owner's item rows; encrypted-library metadata stays
+  owner-only even for administrators.
+- The read API is strictly `GET`; it cannot mutate item state, thumbnails,
+  users or Seafile data. Unsafe routes will require CSRF when mutations are
+  added.
+
 ## Read-only database snapshot
 
 The legacy SQLite database is owned by `www-data` and stays in WAL mode for the

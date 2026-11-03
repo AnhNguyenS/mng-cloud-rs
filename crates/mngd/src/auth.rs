@@ -27,12 +27,15 @@ use mng_db::{user_by_id, user_by_username, User};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::{db::DatabaseState, AppState};
+use crate::{db::DatabaseState, http::json_error, AppState};
 
-/// Marker inserted by [`require_session`] after the cookie signature and
-/// lifetime have been checked.
+/// Marker inserted by [`require_session`] after the cookie signature, lifetime,
+/// CSRF token and fresh `users` row have been checked.
 #[derive(Clone)]
-pub struct AuthenticatedSession(pub Session);
+pub struct AuthenticatedUser {
+    pub session: Session,
+    pub user: User,
+}
 
 struct AuthInner {
     session: Option<SessionConfig>,
@@ -186,10 +189,28 @@ pub async fn require_session(
         }
     }
 
+    // Re-read the account on every request. The cookie carries identity, not
+    // privileges: deactivation and role changes in the snapshot take effect
+    // immediately instead of lasting until the session expires.
+    let user = match load_user(&state, session.uid).await {
+        Ok(Some(user)) if user.active => user,
+        Ok(Some(_)) | Ok(None) => {
+            tracing::info!(uid = session.uid, "session user is no longer active");
+            return clear_session_cookie(&state, auth_required());
+        }
+        Err(()) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "database_unavailable",
+                None,
+            )
+        }
+    };
+
     let mut request = request;
     request
         .extensions_mut()
-        .insert(AuthenticatedSession(session));
+        .insert(AuthenticatedUser { session, user });
     next.run(request).await
 }
 
@@ -332,34 +353,20 @@ pub async fn login(
     response
 }
 
-pub async fn me(
-    State(state): State<AppState>,
-    Extension(authenticated): Extension<AuthenticatedSession>,
-) -> Response {
-    let session = authenticated.0;
-    match load_user(&state, session.uid).await {
-        Ok(Some(user)) if user.active => Json(json!({
-            "ok": true,
-            "csrf": session.csrf,
-            "expires_at": session.exp,
-            "me": user.public(),
-        }))
-        .into_response(),
-        Ok(Some(_)) | Ok(None) => {
-            tracing::info!(uid = session.uid, "session user is no longer active");
-            clear_session_cookie(&state, auth_required())
-        }
-        Err(()) => json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "database_unavailable",
-            None,
-        ),
-    }
+pub async fn me(Extension(authenticated): Extension<AuthenticatedUser>) -> Response {
+    let AuthenticatedUser { session, user } = authenticated;
+    Json(json!({
+        "ok": true,
+        "csrf": session.csrf,
+        "expires_at": session.exp,
+        "me": user.public(),
+    }))
+    .into_response()
 }
 
 pub async fn logout(
     State(state): State<AppState>,
-    Extension(_session): Extension<AuthenticatedSession>,
+    Extension(_authenticated): Extension<AuthenticatedUser>,
 ) -> Response {
     clear_session_cookie(&state, Json(json!({ "ok": true })).into_response())
 }
@@ -479,21 +486,13 @@ fn rate_limited(retry_after: Duration) -> Response {
     response
 }
 
-fn json_error(status: StatusCode, code: &'static str, message: Option<String>) -> Response {
-    let mut body = json!({ "ok": false, "error": code });
-    if let Some(message) = message {
-        body["message"] = json!(message);
-    }
-    (status, Json(body)).into_response()
-}
-
 /// Apply the small JSON body limit only to the API router.
 pub fn api_layers(router: axum::Router<AppState>) -> axum::Router<AppState> {
     router.layer(DefaultBodyLimit::max(16 * 1024))
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{router, AppState};
     use axum::body::Body;
@@ -503,24 +502,25 @@ mod tests {
     use tempfile::TempDir;
     use tower::ServiceExt;
 
-    const PASSWORD: &str = "mng-dummy-password";
+    pub(crate) const PASSWORD: &str = "mng-dummy-password";
     const PASSWORD_HASH: &str = "$2b$10$/zz.uCobJ8PliYRPoujpHuQQ1RCjHFQe2YjMxcdsealWSlCQfHbLi";
     const SECRET: &[u8] = b"a-test-session-secret-with-32-bytes!";
     const PEER: SocketAddr = SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 50000);
 
-    struct Fixture {
+    pub(crate) struct Fixture {
         _dir: TempDir,
-        state: AppState,
+        pub(crate) state: AppState,
+        pub(crate) db_path: std::path::PathBuf,
     }
 
-    fn fixture(configured: bool, active: bool, max_attempts: u32) -> Fixture {
+    pub(crate) fn fixture(configured: bool, active: bool, max_attempts: u32) -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("mng-cloud.sqlite");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         conn.execute_batch(
             "CREATE TABLE users (
                 id INTEGER PRIMARY KEY,
-                username TEXT NOT NULL,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 display_name TEXT NOT NULL,
                 password_hash TEXT NOT NULL,
                 is_admin INTEGER NOT NULL DEFAULT 0,
@@ -528,21 +528,165 @@ mod tests {
                 created_at INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL DEFAULT 0,
                 last_login_at INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE user_clouds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                cloud TEXT NOT NULL,
+                username TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                root TEXT NOT NULL DEFAULT '/',
+                import_path TEXT NOT NULL DEFAULT '',
+                provisioned INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                UNIQUE (user_id, cloud)
+            );
+            CREATE TABLE items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL DEFAULT 1,
+                cloud TEXT NOT NULL,
+                path TEXT NOT NULL,
+                parent TEXT NOT NULL DEFAULT '',
+                name TEXT NOT NULL,
+                stem TEXT NOT NULL DEFAULT '',
+                ext TEXT NOT NULL DEFAULT '',
+                media_type TEXT NOT NULL DEFAULT 'photo',
+                mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+                size INTEGER NOT NULL DEFAULT 0,
+                etag TEXT NOT NULL DEFAULT '',
+                mtime INTEGER NOT NULL DEFAULT 0,
+                taken_at INTEGER NOT NULL DEFAULT 0,
+                taken_src TEXT NOT NULL DEFAULT '',
+                width INTEGER NOT NULL DEFAULT 0,
+                height INTEGER NOT NULL DEFAULT 0,
+                duration REAL NOT NULL DEFAULT 0,
+                live INTEGER NOT NULL DEFAULT 0,
+                live_name TEXT NOT NULL DEFAULT '',
+                hidden INTEGER NOT NULL DEFAULT 0,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                thumb_state INTEGER NOT NULL DEFAULT 0,
+                thumb_error TEXT NOT NULL DEFAULT '',
+                indexed_at INTEGER NOT NULL DEFAULT 0,
+                lat REAL NOT NULL DEFAULT 0,
+                lng REAL NOT NULL DEFAULT 0,
+                phash TEXT NOT NULL DEFAULT '',
+                ahash TEXT NOT NULL DEFAULT '',
+                phash_state INTEGER NOT NULL DEFAULT 0,
+                faces_state INTEGER NOT NULL DEFAULT 0,
+                place_state INTEGER NOT NULL DEFAULT 0,
+                place_road TEXT NOT NULL DEFAULT '',
+                place_ward TEXT NOT NULL DEFAULT '',
+                place_district TEXT NOT NULL DEFAULT '',
+                place_province TEXT NOT NULL DEFAULT '',
+                place_display TEXT NOT NULL DEFAULT '',
+                search_text TEXT NOT NULL DEFAULT '',
+                UNIQUE (owner_id, cloud, path)
             );",
         )
         .unwrap();
         conn.execute(
             "INSERT INTO users (id, username, display_name, password_hash, is_admin, active)
-             VALUES (1, 'alice', 'Alice', ?1, 1, ?2)",
+             VALUES (1, 'alice', 'Alice', ?1, 1, ?2),
+                    (2, 'bob', 'Bob', ?1, 0, 1),
+                    (3, 'carol', 'Carol', ?1, 0, 0)",
             rusqlite::params![PASSWORD_HASH, if active { 1 } else { 0 }],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO user_clouds (user_id, cloud, username, base_url, root, import_path, provisioned)
+             VALUES (1, 'seafile', 'alice', 'http://127.0.0.1:8082', '/', '/Camera Uploads', 1),
+                    (1, 'nextcloud', 'alice', 'http://127.0.0.1:8080', '/photos', '/import', 1),
+                    (2, 'seafile', 'bob', 'http://127.0.0.1:8082', '/', '/Camera Uploads', 1),
+                    (3, 'seafile', 'carol', 'http://127.0.0.1:8082', '/', '/Camera Uploads', 1)",
+            [],
+        )
+        .unwrap();
+        for (
+            id,
+            owner,
+            cloud,
+            path,
+            name,
+            media,
+            size,
+            taken,
+            favorite,
+            hidden,
+            deleted,
+            thumb,
+            live,
+        ) in [
+            (
+                1, 1, "seafile", "/a.jpg", "a.jpg", "photo", 100, 100, 1, 0, 0, 0, 0,
+            ),
+            (
+                2, 1, "seafile", "/b.mp4", "b.mp4", "video", 200, 200, 0, 0, 0, 0, 0,
+            ),
+            (
+                3,
+                1,
+                "nextcloud",
+                "/c.jpg",
+                "c.jpg",
+                "photo",
+                300,
+                300,
+                0,
+                0,
+                0,
+                0,
+                0,
+            ),
+            (
+                4, 2, "seafile", "/d.jpg", "d.jpg", "photo", 400, 400, 0, 0, 0, 0, 0,
+            ),
+            (
+                5, 1, "seafile", "/e.jpg", "e.jpg", "photo", 500, 500, 0, 0, 1, 0, 0,
+            ),
+            (
+                6, 1, "seafile", "/f.jpg", "f.jpg", "photo", 600, 600, 0, 1, 0, 0, 0,
+            ),
+            (
+                7, 1, "seafile", "/g.jpg", "g.jpg", "photo", 700, 700, 0, 0, 0, 3, 0,
+            ),
+            (
+                8, 3, "seafile", "/h.jpg", "h.jpg", "photo", 800, 800, 0, 0, 0, 0, 0,
+            ),
+            (
+                9,
+                1,
+                "seafile",
+                "/live.heic",
+                "live.heic",
+                "photo",
+                900,
+                900,
+                0,
+                0,
+                0,
+                0,
+                1,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO items (id, owner_id, cloud, path, name, stem, ext, media_type, size, \
+                 taken_at, favorite, hidden, deleted, thumb_state, live) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'jpg', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                rusqlite::params![
+                    id, owner, cloud, path, name, media, size, taken, favorite, hidden, deleted,
+                    thumb, live
+                ],
+            )
+            .unwrap();
+        }
         drop(conn);
 
         let config = Config {
             web_root: dir.path().to_path_buf(),
             data_dir: dir.path().to_path_buf(),
-            database: Some(db_path),
+            database: Some(db_path.clone()),
             session_cookie_secure: false,
             login_max_attempts: max_attempts,
             ..Config::default()
@@ -567,6 +711,7 @@ mod tests {
         let auth = AuthState::build(&config, db.clone(), session, error);
         Fixture {
             _dir: dir,
+            db_path,
             state: AppState {
                 config: Arc::new(config),
                 started: Instant::now(),
@@ -576,7 +721,12 @@ mod tests {
         }
     }
 
-    fn json_request(method: Method, uri: &str, body: serde_json::Value) -> Request<Body> {
+    #[allow(dead_code)]
+    pub(crate) fn json_request(
+        method: Method,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> Request<Body> {
         Request::builder()
             .method(method)
             .uri(uri)
@@ -586,7 +736,7 @@ mod tests {
             .unwrap()
     }
 
-    fn cookie_request(
+    pub(crate) fn cookie_request(
         method: Method,
         uri: &str,
         cookie: &str,
@@ -603,7 +753,7 @@ mod tests {
         builder.body(Body::empty()).unwrap()
     }
 
-    async fn call(
+    pub(crate) async fn call(
         state: &AppState,
         request: Request<Body>,
     ) -> (StatusCode, HeaderMap, serde_json::Value) {
@@ -615,19 +765,30 @@ mod tests {
         (status, headers, body)
     }
 
-    async fn login(state: &AppState, password: &str) -> (StatusCode, HeaderMap, serde_json::Value) {
+    pub(crate) async fn login_as(
+        state: &AppState,
+        username: &str,
+        password: &str,
+    ) -> (StatusCode, HeaderMap, serde_json::Value) {
         call(
             state,
             json_request(
                 Method::POST,
                 "/api/v1/auth/login",
-                json!({ "username": " Alice ", "password": password }),
+                json!({ "username": username, "password": password }),
             ),
         )
         .await
     }
 
-    fn set_cookie(headers: &HeaderMap) -> String {
+    pub(crate) async fn login(
+        state: &AppState,
+        password: &str,
+    ) -> (StatusCode, HeaderMap, serde_json::Value) {
+        login_as(state, " Alice ", password).await
+    }
+
+    pub(crate) fn set_cookie(headers: &HeaderMap) -> String {
         headers
             .get(header::SET_COOKIE)
             .unwrap()
@@ -637,6 +798,11 @@ mod tests {
             .next()
             .unwrap()
             .to_owned()
+    }
+
+    pub(crate) fn exec(fixture: &Fixture, sql: &str) {
+        let conn = rusqlite::Connection::open(&fixture.db_path).unwrap();
+        conn.execute_batch(sql).unwrap();
     }
 
     #[tokio::test]

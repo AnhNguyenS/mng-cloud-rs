@@ -124,6 +124,7 @@ pub struct ItemQuery {
     pub cloud: Option<String>,
     pub media_type: Option<String>,
     pub favorite: Option<bool>,
+    pub live: Option<bool>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }

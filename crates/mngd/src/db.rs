@@ -13,6 +13,16 @@ pub struct DatabaseState {
     pub startup_error: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    #[error("database is unavailable: {}", .0.as_deref().unwrap_or("not opened"))]
+    Unavailable(Option<String>),
+    #[error("database query failed: {0}")]
+    Query(#[from] mng_db::read::Error),
+    #[error("database task failed: {0}")]
+    Task(String),
+}
+
 impl DatabaseState {
     pub fn load(config: &Config) -> Self {
         let path = config.database_path();
@@ -77,6 +87,23 @@ impl DatabaseState {
         match self.mode {
             OpenMode::LiveReadOnly => "live",
             OpenMode::Snapshot => "snapshot",
+        }
+    }
+
+    /// Run a read-only query on the connection pool. The connection is opened
+    /// inside the blocking task so a slow query never blocks the async runtime.
+    pub async fn read<T, F>(&self, operation: F) -> Result<T, ReadError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Database) -> Result<T, mng_db::read::Error> + Send + 'static,
+    {
+        let Some(database) = self.database.clone() else {
+            return Err(ReadError::Unavailable(self.startup_error.clone()));
+        };
+        match tokio::task::spawn_blocking(move || operation(&database)).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(ReadError::Query(error)),
+            Err(error) => Err(ReadError::Task(error.to_string())),
         }
     }
 }

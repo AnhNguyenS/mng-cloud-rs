@@ -106,6 +106,34 @@ POST /api/v1/auth/logout  ── requires X-CSRF-Token, clears the cookie
   readable, so a missing secret or stale snapshot is visible without exposing
   secrets.
 
+## Read-only library API
+
+```
+GET  /api/v1/bootstrap        identity, CSRF, libraries, counts
+GET  /api/v1/clouds           libraries owned by the session user
+GET  /api/v1/counts           grouped photo/video counts (optional cloud)
+GET  /api/v1/items            filters: cloud, type, favorite, limit, offset
+GET  /api/v1/items/{id}       one item plus its Live Photo companion
+GET  /api/v1/stats            owner counters and thumbnail-state counts
+GET  /api/v1/admin/users      all accounts and aggregate counts (admin only)
+GET  /api/v1/admin/users/{id} one account, libraries and counts (admin only)
+```
+
+- The session middleware loads the `users` row on every protected request.
+  Roles and the `active` flag therefore come from the database, not from the
+  cookie; a deactivated account or a revoked admin role is rejected on the
+  next request.
+- Item and count queries are always constrained by `owner_id = session user`.
+  A `cloud` parameter must also exist in that user's `user_clouds` rows.
+  Unowned libraries and other users' item ids return `404`, which avoids
+  confirming that a library exists for someone else.
+- Admin rights unlock only `/api/v1/admin/*` metadata. They never bypass the
+  owner scope for items or libraries; encrypted-library metadata remains
+  private even to an administrator.
+- `.backup` snapshots are immutable and read-only. No handler writes
+  `last_login_at`, item state, thumbnails or anything else. All mutations stay
+  in the PHP layer until the native writer slice.
+
 ## Why not rewrite `seaf-server`
 
 `seaf-server` is the storage engine and the compatibility boundary for the

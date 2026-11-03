@@ -1,6 +1,6 @@
 use mng_db::{
-    cloud_for_user, clouds_for_user, item_by_id, item_counts, list_items, thumb_state_counts,
-    user_by_id, user_by_username, Database, ItemQuery, OpenMode,
+    all_users, cloud_for_user, clouds_for_user, count_items, item_by_id, item_counts, list_items,
+    thumb_state_counts, user_by_id, user_by_username, Database, ItemQuery, OpenMode,
 };
 use rusqlite::{params, Connection};
 
@@ -292,6 +292,47 @@ fn item_lookup_never_crosses_owner_boundary() {
         6,
         "hidden rows remain addressable"
     );
+}
+
+#[test]
+fn counts_match_the_listing_filters() {
+    let conn = seeded();
+    let all = ItemQuery::default();
+    assert_eq!(count_items(&conn, 1, &all).unwrap(), 4);
+
+    let favorites = ItemQuery {
+        favorite: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(count_items(&conn, 1, &favorites).unwrap(), 1);
+    assert_eq!(list_items(&conn, 1, &favorites).unwrap().len(), 1);
+
+    let videos = ItemQuery {
+        media_type: Some("video".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(count_items(&conn, 1, &videos).unwrap(), 1);
+    assert_eq!(count_items(&conn, 2, &videos).unwrap(), 0);
+
+    let live = ItemQuery {
+        live: Some(true),
+        ..Default::default()
+    };
+    assert_eq!(count_items(&conn, 1, &live).unwrap(), 0);
+    assert_eq!(count_items(&conn, 1, &all).unwrap(), 4);
+}
+
+#[test]
+fn all_users_preserves_password_hashes_for_auth_only() {
+    let conn = seeded();
+    let users = all_users(&conn).unwrap();
+    assert_eq!(
+        users.iter().map(|user| user.id).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(users[0].password_hash, "$2y$10$hash");
+    assert!(users[0].is_admin);
+    assert!(!users[1].is_admin);
 }
 
 #[test]

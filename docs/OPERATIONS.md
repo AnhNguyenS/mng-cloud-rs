@@ -294,6 +294,26 @@ curl -sS -b /tmp/mng.jar -H "X-CSRF-Token: $CSRF" -X POST \
   https://cloud.example.com/api/v1/auth/logout
 ```
 
+### Read-only library API
+
+```bash
+# Identity, libraries and grouped counters in one response
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/bootstrap
+
+# Owner-scoped listings and item detail
+curl -sS -b /tmp/mng.jar 'https://cloud.example.com/api/v1/items?cloud=seafile&limit=20'
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/items/123
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/counts
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/stats
+
+# Admin metadata; a non-admin session receives 403 forbidden
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/admin/users
+```
+
+A `cloud` the session user does not own returns `404`, including to an admin.
+Item and count responses never contain password hashes or another owner's rows.
+These routes are `GET` only and do not modify `thumb_state` or any other data.
+
 Login is throttled per client IP and per IP+username; a blocked client gets
 `429` with `Retry-After`. Behind nginx, `mngd` trusts `X-Forwarded-For` only
 when the direct peer is loopback. Configure nginx to set
@@ -344,7 +364,7 @@ In a private browser profile with the extension installed:
 The canary is installed but **not exposed through nginx** yet:
 
 - user: `mng` (system account, no login shell)
-- binary: `/usr/local/bin/mngd` (auth + read model)
+- binary: `/usr/local/bin/mngd` (auth + RBAC + read API)
 - app: `/var/www/mng-cloud-app/releases/0.1.3` (`current` symlink)
 - config: `/etc/mng-cloud/mngd.toml`
 - session key: `/etc/mng-cloud/session.key` (`root:mng`, `0440`)
@@ -357,15 +377,18 @@ The canary is installed but **not exposed through nginx** yet:
 `readyz` reports `status: ready`, `database.mode: snapshot`, three users and
 `auth.available: true`. A login probe with an unknown user returns
 `401 bad_credentials`, which proves the snapshot and bcrypt path work without
-touching a real account.
+touching a real account. Unauthenticated requests to `/api/v1/bootstrap`,
+`/api/v1/clouds`, `/api/v1/items` and `/api/v1/admin/users` return
+`401 auth_required`; the read routes are live on the loopback canary but not
+exposed through nginx.
 
 The local signed release is `0.1.4` (sequence 4); production still serves
 `0.1.3` until the next app deploy. The PHP tree and the existing nginx vhost are
-untouched. `/app/` and `/api/v1/auth/*` are not public until nginx locations are
+untouched. `/app/` and `/api/v1/*` are not public until nginx locations are
 added deliberately.
 
 Rollback point for this canary:
-`/root/mng-cloud-backup-auth-20261104-003426` (binary, config, unit).
+`/root/mng-cloud-backup-rbac-20261104-004457` (binary, config, unit).
 
 ```bash
 systemctl status mngd

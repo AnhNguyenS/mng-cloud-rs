@@ -12,7 +12,7 @@ the production box.
 | `crates/mng-core` | Config, Seafile E2EE crypto, chunk and manifest primitives |
 | `crates/mng-auth` | Password verification, signed sessions, CSRF and login rate limiting |
 | `crates/mng-db` | Read-only SQLite models for users, libraries and items |
-| `crates/mngd` | Native HTTP service: immutable PWA, health, auth API, future RBAC |
+| `crates/mngd` | Native HTTP service: immutable PWA, health, auth, RBAC, read-only library API |
 | `crates/mng-wasm` | Browser-facing E2EE engine compiled to WebAssembly |
 | `crates/mng-sign` | Offline release signer (P-256 ECDSA) and verifier |
 | `extension/` | MNG Trusted browser extension (Chromium MV3 / Orion) |

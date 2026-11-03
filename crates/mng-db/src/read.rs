@@ -188,34 +188,60 @@ pub fn thumb_state_counts(conn: &Connection, owner_id: i64) -> Result<Vec<ThumbS
 }
 
 pub fn list_items(conn: &Connection, owner_id: i64, query: &ItemQuery) -> Result<Vec<Item>> {
-    let mut sql = format!(
-        "SELECT {ITEM_COLUMNS} FROM items \
-         WHERE owner_id = ?1 AND deleted = 0 AND hidden = 0"
-    );
-    let mut args: Vec<Value> = vec![owner_id.into()];
-
-    if let Some(cloud) = &query.cloud {
-        args.push(Value::Text(cloud.clone()));
-        sql.push_str(&format!(" AND cloud = ?{}", args.len()));
-    }
-    if let Some(media_type) = &query.media_type {
-        args.push(Value::Text(media_type.clone()));
-        sql.push_str(&format!(" AND media_type = ?{}", args.len()));
-    }
-    if let Some(favorite) = query.favorite {
-        args.push(Value::Integer(i64::from(favorite)));
-        sql.push_str(&format!(" AND favorite = ?{}", args.len()));
-    }
-
+    let (filter, mut args) = item_filter(owner_id, query);
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = query.offset.unwrap_or(0).min(MAX_OFFSET);
-    sql.push_str(" ORDER BY taken_at DESC, id DESC LIMIT ?");
+    let limit_index = args.len() + 1;
+    let offset_index = args.len() + 2;
+    let sql = format!(
+        "SELECT {ITEM_COLUMNS} FROM items WHERE {filter} \
+         ORDER BY taken_at DESC, id DESC LIMIT ?{limit_index} OFFSET ?{offset_index}"
+    );
     args.push(i64::from(limit).into());
-    sql.push_str(" OFFSET ?");
     args.push(i64::from(offset).into());
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter()), item_from_row)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+/// Count the rows that [`list_items`] would paginate with the same filters.
+pub fn count_items(conn: &Connection, owner_id: i64, query: &ItemQuery) -> Result<i64> {
+    let (filter, args) = item_filter(owner_id, query);
+    let sql = format!("SELECT COUNT(*) FROM items WHERE {filter}");
+    conn.query_row(&sql, params_from_iter(args.iter()), |row| row.get(0))
+        .map_err(Error::from)
+}
+
+fn item_filter(owner_id: i64, query: &ItemQuery) -> (String, Vec<Value>) {
+    let mut filter = String::from("owner_id = ?1 AND deleted = 0 AND hidden = 0");
+    let mut args: Vec<Value> = vec![owner_id.into()];
+
+    if let Some(cloud) = &query.cloud {
+        args.push(Value::Text(cloud.clone()));
+        filter.push_str(&format!(" AND cloud = ?{}", args.len()));
+    }
+    if let Some(media_type) = &query.media_type {
+        args.push(Value::Text(media_type.clone()));
+        filter.push_str(&format!(" AND media_type = ?{}", args.len()));
+    }
+    if let Some(favorite) = query.favorite {
+        args.push(Value::Integer(i64::from(favorite)));
+        filter.push_str(&format!(" AND favorite = ?{}", args.len()));
+    }
+    if let Some(live) = query.live {
+        args.push(Value::Integer(i64::from(live)));
+        filter.push_str(&format!(" AND live = ?{}", args.len()));
+    }
+
+    (filter, args)
+}
+
+pub fn all_users(conn: &Connection) -> Result<Vec<User>> {
+    let sql = format!("SELECT {USER_COLUMNS} FROM users ORDER BY id");
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map([], user_from_row)?;
     rows.collect::<std::result::Result<Vec<_>, _>>()
         .map_err(Error::from)
 }

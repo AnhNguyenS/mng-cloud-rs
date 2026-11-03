@@ -2,9 +2,9 @@
 
 //! Native edge service for MNG Cloud.
 //!
-//! Phase 1 exposes only health probes and the immutable PWA directory. API,
-//! auth and RBAC are added in later slices; keeping this binary small makes the
-//! ARMv7 canary easy to observe and roll back.
+//! The service serves the immutable PWA, health probes, session authentication
+//! and read-only library APIs. Mutations and the Seafile E2EE bridge are added
+//! in later slices; the PHP application remains the only database writer.
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Instant};
 
@@ -26,6 +26,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 mod auth;
 mod db;
+mod http;
+mod rbac;
+mod read;
 
 use auth::AuthState;
 use db::DatabaseState;
@@ -91,9 +94,21 @@ fn router(state: AppState) -> Router {
     let static_files =
         ServeDir::new(state.config.web_root.clone()).append_index_html_on_directories(true);
 
+    let admin_api = Router::new()
+        .route("/users", get(read::admin_users))
+        .route("/users/{id}", get(read::admin_user))
+        .layer(middleware::from_fn(rbac::require_admin));
+
     let protected_api = Router::new()
         .route("/v1/auth/me", get(auth::me))
         .route("/v1/auth/logout", axum::routing::post(auth::logout))
+        .route("/v1/bootstrap", get(read::bootstrap))
+        .route("/v1/clouds", get(read::clouds))
+        .route("/v1/counts", get(read::counts))
+        .route("/v1/items", get(read::items))
+        .route("/v1/items/{id}", get(read::item))
+        .route("/v1/stats", get(read::stats))
+        .nest("/v1/admin", admin_api)
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,

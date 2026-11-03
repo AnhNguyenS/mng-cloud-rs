@@ -10,7 +10,7 @@ pub mod read;
 
 pub use model::{Cloud, Item, ItemCount, ItemQuery, PublicUser, ThumbStateCount, User};
 pub use read::{
-    cloud_for_user, clouds_for_user, item_by_id, item_by_path, item_counts, list_items,
-    thumb_state_counts, user_by_id, user_by_username, Database, DbProbe, OpenMode, DEFAULT_LIMIT,
-    MAX_LIMIT, MAX_OFFSET,
+    all_users, cloud_for_user, clouds_for_user, count_items, item_by_id, item_by_path, item_counts,
+    list_items, thumb_state_counts, user_by_id, user_by_username, Database, DbProbe, OpenMode,
+    DEFAULT_LIMIT, MAX_LIMIT, MAX_OFFSET,
 };
