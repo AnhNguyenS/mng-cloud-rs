@@ -1,8 +1,8 @@
 use mng_db::{
     album_count, album_items, all_users, cloud_for_user, clouds_for_user, count_items, item_by_id,
     item_counts, list_items, month_buckets, period_covers, thumb_state_counts, user_by_id,
-    user_by_username, year_buckets, AlbumKind, Database, ItemQuery, MonthBucket, OpenMode,
-    YearBucket,
+    user_by_username, vault_by_id, vaults_for_user, year_buckets, AlbumKind, Database, ItemQuery,
+    MonthBucket, OpenMode, YearBucket,
 };
 use rusqlite::{params, Connection};
 
@@ -81,6 +81,21 @@ CREATE TABLE items (
     search_text TEXT NOT NULL DEFAULT '',
     UNIQUE (owner_id, cloud, path)
 );
+CREATE TABLE vaults (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id INTEGER NOT NULL,
+    uid TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    kdf TEXT NOT NULL DEFAULT 'PBKDF2-SHA256',
+    kdf_salt TEXT NOT NULL DEFAULT '',
+    kdf_iterations INTEGER NOT NULL DEFAULT 310000,
+    verifier TEXT NOT NULL DEFAULT '',
+    bytes INTEGER NOT NULL DEFAULT 0,
+    manifest_size INTEGER NOT NULL DEFAULT 0,
+    manifest_at INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
 "#;
 
 fn seeded() -> Connection {
@@ -150,6 +165,15 @@ fn seeded() -> Connection {
         "INSERT INTO items (id, owner_id, cloud, path, name, stem, ext, media_type, size, \
          taken_at, live) VALUES (9, 1, 'seafile', '/live.heic', 'live.heic', 'live.heic', 'heic', \
          'photo', 900, 900, 1)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO vaults (id, owner_id, uid, name, kdf_salt, kdf_iterations, verifier, \
+         bytes, manifest_size, manifest_at, created_at, updated_at) \
+         VALUES (1, 1, 'v-admin', 'Kho Admin', 'c2FsdA==', 310000, 'dmVyaWZpZXI=', 2048, 512, \
+                 1700000000, 1700000000, 1700000100), \
+                (2, 2, 'v-alice', 'Kho Alice', '', 310000, '', 0, 0, 0, 0, 0)",
         [],
     )
     .unwrap();
@@ -433,6 +457,27 @@ fn album_predicates_are_fixed_and_owner_scoped() {
         .unwrap()
         .iter()
         .all(|item| item.owner_id == 3));
+}
+
+#[test]
+fn vault_metadata_is_owner_scoped() {
+    let conn = seeded();
+
+    let admin_vaults = vaults_for_user(&conn, 1).unwrap();
+    assert_eq!(admin_vaults.len(), 1);
+    assert_eq!(admin_vaults[0].uid, "v-admin");
+    assert_eq!(admin_vaults[0].kdf_salt, "c2FsdA==");
+    assert_eq!(admin_vaults[0].kdf_iterations, 310000);
+    assert_eq!(admin_vaults[0].manifest_size, 512);
+
+    let alice_vaults = vaults_for_user(&conn, 2).unwrap();
+    assert_eq!(alice_vaults.len(), 1);
+    assert_eq!(alice_vaults[0].name, "Kho Alice");
+    assert!(vaults_for_user(&conn, 3).unwrap().is_empty());
+
+    assert!(vault_by_id(&conn, 1, admin_vaults[0].id).unwrap().is_some());
+    assert!(vault_by_id(&conn, 2, admin_vaults[0].id).unwrap().is_none());
+    assert!(vault_by_id(&conn, 1, 99).unwrap().is_none());
 }
 
 #[test]

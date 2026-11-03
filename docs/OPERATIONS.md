@@ -324,6 +324,8 @@ curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/counts
 curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/years
 curl -sS -b /tmp/mng.jar 'https://cloud.example.com/api/v1/months?year=2025'
 curl -sS -b /tmp/mng.jar 'https://cloud.example.com/api/v1/albums?cloud=seafile'
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/vaults
+curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/vaults/1
 curl -sS -b /tmp/mng.jar https://cloud.example.com/api/v1/stats
 
 # Admin metadata; a non-admin session receives 403 forbidden
@@ -400,8 +402,9 @@ The canary is installed but **not exposed through nginx** yet:
 `401 bad_credentials`, which proves the snapshot and bcrypt path work without
 touching a real account. Unauthenticated requests to `/api/v1/bootstrap`,
 `/api/v1/clouds`, `/api/v1/items`, `/api/v1/years`, `/api/v1/months`,
-`/api/v1/albums` and `/api/v1/admin/users` return `401 auth_required`; the read
-routes are live on the loopback canary but not exposed through nginx.
+`/api/v1/albums`, `/api/v1/vaults` and `/api/v1/admin/users` return
+`401 auth_required`; the read routes are live on the loopback canary but not
+exposed through nginx.
 
 The signed app is `0.1.4` (sequence 4). Its metadata is published at
 `https://anhnguyens.github.io/mng-cloud-rs/releases/current/` and every signed

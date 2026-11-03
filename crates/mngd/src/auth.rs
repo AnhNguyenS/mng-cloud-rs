@@ -583,6 +583,21 @@ pub(crate) mod tests {
                 place_display TEXT NOT NULL DEFAULT '',
                 search_text TEXT NOT NULL DEFAULT '',
                 UNIQUE (owner_id, cloud, path)
+            );
+            CREATE TABLE vaults (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                uid TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL DEFAULT '',
+                kdf TEXT NOT NULL DEFAULT 'PBKDF2-SHA256',
+                kdf_salt TEXT NOT NULL DEFAULT '',
+                kdf_iterations INTEGER NOT NULL DEFAULT 310000,
+                verifier TEXT NOT NULL DEFAULT '',
+                bytes INTEGER NOT NULL DEFAULT 0,
+                manifest_size INTEGER NOT NULL DEFAULT 0,
+                manifest_at INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
             );",
         )
         .unwrap();
@@ -681,6 +696,15 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
+        conn.execute(
+            "INSERT INTO vaults (id, owner_id, uid, name, kdf_salt, kdf_iterations, verifier, \
+             bytes, manifest_size, manifest_at, created_at, updated_at) \
+             VALUES (1, 1, 'v-alice', 'Kho Alice', 'c2FsdA==', 310000, 'dmVyaWZpZXI=', 2048, 512, \
+                     1700000000, 1700000000, 1700000100), \
+                    (2, 2, 'v-bob', 'Kho Bob', '', 310000, '', 0, 0, 0, 0, 0)",
+            [],
+        )
+        .unwrap();
         drop(conn);
 
         let config = Config {

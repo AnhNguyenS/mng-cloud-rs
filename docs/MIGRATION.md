@@ -9,7 +9,7 @@ slice has a rollback path and no slice rewrites Seafile data.
 | 1 | Monorepo, CI, ARMv7 `mngd`, signed PWA shell | done | `mngd` canary on `127.0.0.1:8090`; `/app/` signed and served read-only |
 | 2 | Rust/WASM E2EE engine parity | core done | decrypt/encrypt vectors match WebCrypto; browser adapter loads WASM |
 | 3 | Config + SQLite read model + sessions | done | users, items, thumbnails readable without PHP |
-| 4 | Auth + RBAC parity | read-only done | login, roles, per-library ACL, CSRF, rate limits, timeline/albums |
+| 4 | Auth + RBAC parity | read-only done | login, roles, per-library ACL, CSRF, rate limits, timeline/albums/vault metadata |
 | 5 | API parity (library/file/trash/import) | next | existing UI works against `/api/v1` |
 | 6 | Seafile E2EE bridge in Rust | planned | unlock, list, download, upload, move, import flows |
 | 7 | Image/chunk pipeline native | planned | thumbnails, HEIC/ffmpeg fallbacks, chunk hashing |

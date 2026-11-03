@@ -110,6 +110,8 @@ fn router(state: AppState) -> Router {
         .route("/v1/years", get(read::years))
         .route("/v1/months", get(read::months))
         .route("/v1/albums", get(read::albums))
+        .route("/v1/vaults", get(read::vaults))
+        .route("/v1/vaults/{id}", get(read::vault))
         .route("/v1/stats", get(read::stats))
         .nest("/v1/admin", admin_api)
         .layer(middleware::from_fn_with_state(

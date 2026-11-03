@@ -3,10 +3,13 @@ use std::{
     time::Duration,
 };
 
-use rusqlite::{params, params_from_iter, types::Value, Connection, OpenFlags, Row};
+use rusqlite::{
+    params, params_from_iter, types::Value, Connection, OpenFlags, OptionalExtension, Row,
+};
 
 use crate::model::{
-    AlbumKind, Cloud, Item, ItemCount, ItemQuery, MonthBucket, ThumbStateCount, User, YearBucket,
+    AlbumKind, Cloud, Item, ItemCount, ItemQuery, MonthBucket, ThumbStateCount, User, Vault,
+    YearBucket,
 };
 
 pub const DEFAULT_LIMIT: u32 = 100;
@@ -18,6 +21,9 @@ const USER_COLUMNS: &str = "id, username, display_name, password_hash, is_admin,
 
 const CLOUD_COLUMNS: &str = "id, user_id, cloud, username, base_url, root, import_path, \
                              provisioned, created_at, updated_at";
+
+const VAULT_COLUMNS: &str = "id, owner_id, uid, name, kdf, kdf_salt, kdf_iterations, verifier, \
+                             bytes, manifest_size, manifest_at, created_at, updated_at";
 
 const ITEM_COLUMNS: &str = "id, owner_id, cloud, path, parent, name, stem, ext, media_type, \
                             mime, size, etag, mtime, taken_at, taken_src, width, height, duration, \
@@ -144,6 +150,22 @@ pub fn cloud_for_user(conn: &Connection, user_id: i64, cloud: &str) -> Result<Op
     let mut stmt = conn.prepare_cached(&sql)?;
     let mut rows = stmt.query(params![user_id, cloud])?;
     Ok(rows.next()?.map(cloud_from_row).transpose()?)
+}
+
+pub fn vaults_for_user(conn: &Connection, owner_id: i64) -> Result<Vec<Vault>> {
+    let sql = format!("SELECT {VAULT_COLUMNS} FROM vaults WHERE owner_id = ?1 ORDER BY id");
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map([owner_id], vault_from_row)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Error::from)
+}
+
+pub fn vault_by_id(conn: &Connection, owner_id: i64, id: i64) -> Result<Option<Vault>> {
+    let sql = format!("SELECT {VAULT_COLUMNS} FROM vaults WHERE id = ?1 AND owner_id = ?2");
+    let mut stmt = conn.prepare_cached(&sql)?;
+    stmt.query_row(params![id, owner_id], vault_from_row)
+        .optional()
+        .map_err(Error::from)
 }
 
 pub fn item_counts(
@@ -453,6 +475,24 @@ fn cloud_from_row(row: &Row<'_>) -> rusqlite::Result<Cloud> {
         provisioned: row.get::<_, i64>(7)? != 0,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+    })
+}
+
+fn vault_from_row(row: &Row<'_>) -> rusqlite::Result<Vault> {
+    Ok(Vault {
+        id: row.get(0)?,
+        owner_id: row.get(1)?,
+        uid: row.get(2)?,
+        name: row.get(3)?,
+        kdf: row.get(4)?,
+        kdf_salt: row.get(5)?,
+        kdf_iterations: row.get(6)?,
+        verifier: row.get(7)?,
+        bytes: row.get(8)?,
+        manifest_size: row.get(9)?,
+        manifest_at: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
     })
 }
 

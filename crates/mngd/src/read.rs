@@ -15,8 +15,8 @@ use axum::{
 use mng_db::{
     album_count, album_items, all_users, cloud_for_user, clouds_for_user, count_items, item_by_id,
     item_by_path, item_counts, list_items, month_buckets, period_covers, thumb_state_counts,
-    year_buckets, AlbumKind, Cloud, Item, ItemCount, ItemQuery, PublicUser, DEFAULT_LIMIT,
-    MAX_LIMIT, MAX_OFFSET,
+    vault_by_id, vaults_for_user, year_buckets, AlbumKind, Cloud, Item, ItemCount, ItemQuery,
+    PublicUser, Vault, DEFAULT_LIMIT, MAX_LIMIT, MAX_OFFSET,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -154,6 +154,45 @@ pub struct AlbumEntry {
     sub: String,
     count: i64,
     covers: Vec<ItemView>,
+}
+
+/// Vault metadata the browser needs to derive the vault key. The salt and
+/// verifier are not secrets: without the user's passphrase they are useless.
+#[derive(Debug, Serialize)]
+pub struct VaultView {
+    id: i64,
+    uid: String,
+    name: String,
+    kdf: String,
+    salt: String,
+    iterations: i64,
+    verifier: String,
+    bytes: i64,
+    manifest_size: i64,
+    manifest_at: i64,
+    manifest_ready: bool,
+    created_at: i64,
+    updated_at: i64,
+}
+
+impl From<&Vault> for VaultView {
+    fn from(vault: &Vault) -> Self {
+        Self {
+            id: vault.id,
+            uid: vault.uid.clone(),
+            name: vault.name.clone(),
+            kdf: vault.kdf.clone(),
+            salt: vault.kdf_salt.clone(),
+            iterations: vault.kdf_iterations,
+            verifier: vault.verifier.clone(),
+            bytes: vault.bytes,
+            manifest_size: vault.manifest_size,
+            manifest_at: vault.manifest_at,
+            manifest_ready: vault.manifest_size > 0,
+            created_at: vault.created_at,
+            updated_at: vault.updated_at,
+        }
+    }
 }
 
 /// The legacy UI shows at most four covers per timeline bucket or album.
@@ -589,6 +628,55 @@ pub async fn albums(
     }
 }
 
+/// Vault metadata for the session user. File content and the vault key never
+/// enter this service.
+pub async fn vaults(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+) -> Response {
+    let owner_id = rbac::item_owner_id(&authenticated);
+    let result = read_db(&state, move |database| {
+        let conn = database.connect()?;
+        vaults_for_user(&conn, owner_id)
+    })
+    .await;
+
+    match result {
+        Ok(vaults) => Json(json!({
+            "ok": true,
+            "vaults": vaults.iter().map(VaultView::from).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(response) => response,
+    }
+}
+
+pub async fn vault(
+    State(state): State<AppState>,
+    Extension(authenticated): Extension<AuthenticatedUser>,
+    Path(id): Path<i64>,
+) -> Response {
+    if id <= 0 {
+        return not_found("Kho không tồn tại.");
+    }
+    let owner_id = rbac::item_owner_id(&authenticated);
+    let result = read_db(&state, move |database| {
+        let conn = database.connect()?;
+        vault_by_id(&conn, owner_id, id)
+    })
+    .await;
+
+    match result {
+        Ok(Some(vault)) => Json(json!({
+            "ok": true,
+            "vault": VaultView::from(&vault),
+        }))
+        .into_response(),
+        Ok(None) => not_found("Kho không tồn tại."),
+        Err(response) => response,
+    }
+}
+
 /// Administrative metadata. This lists every account and its aggregate counts
 /// but never returns another owner's item rows or password hashes.
 pub async fn admin_users(
@@ -817,9 +905,16 @@ mod tests {
     };
 
     async fn session_cookie(fixture: &crate::auth::tests::Fixture, username: &str) -> String {
-        let (status, headers, _) = login_as(&fixture.state, username, PASSWORD).await;
+        session(fixture, username).await.0
+    }
+
+    async fn session(fixture: &crate::auth::tests::Fixture, username: &str) -> (String, String) {
+        let (status, headers, body) = login_as(&fixture.state, username, PASSWORD).await;
         assert_eq!(status, StatusCode::OK, "login failed for {username}");
-        set_cookie(&headers)
+        (
+            set_cookie(&headers),
+            body["csrf"].as_str().expect("csrf token").to_owned(),
+        )
     }
 
     async fn get(
@@ -862,6 +957,8 @@ mod tests {
             "/api/v1/years",
             "/api/v1/months",
             "/api/v1/albums",
+            "/api/v1/vaults",
+            "/api/v1/vaults/1",
             "/api/v1/stats",
             "/api/v1/admin/users",
         ] {
@@ -1083,6 +1180,57 @@ mod tests {
         assert_eq!(album_keys(albums), vec!["all", "year:1970"]);
         assert_eq!(albums[0]["count"], 1);
         assert_eq!(ids(&albums[0]["covers"]), vec![4]);
+    }
+
+    #[tokio::test]
+    async fn vault_metadata_is_owner_scoped_and_read_only() {
+        let fixture = fixture(true, true, 5);
+        let (alice, csrf) = session(&fixture, "alice").await;
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/vaults").await;
+        assert_eq!(status, StatusCode::OK);
+        let vaults = body["vaults"].as_array().unwrap();
+        assert_eq!(vaults.len(), 1);
+        assert_eq!(vaults[0]["id"], 1);
+        assert_eq!(vaults[0]["uid"], "v-alice");
+        assert_eq!(vaults[0]["name"], "Kho Alice");
+        assert_eq!(vaults[0]["kdf"], "PBKDF2-SHA256");
+        assert_eq!(vaults[0]["salt"], "c2FsdA==");
+        assert_eq!(vaults[0]["iterations"], 310000);
+        assert_eq!(vaults[0]["verifier"], "dmVyaWZpZXI=");
+        assert_eq!(vaults[0]["bytes"], 2048);
+        assert_eq!(vaults[0]["manifest_size"], 512);
+        assert_eq!(vaults[0]["manifest_ready"], true);
+        assert!(vaults[0].get("owner_id").is_none());
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/vaults/1").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["vault"]["uid"], "v-alice");
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/vaults/2").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "not_found");
+
+        let (status, _, body) = get(&fixture, &alice, "/api/v1/vaults/0").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"], "not_found");
+
+        let bob = session_cookie(&fixture, "bob").await;
+        let (status, _, body) = get(&fixture, &bob, "/api/v1/vaults").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["vaults"].as_array().unwrap().len(), 1);
+        assert_eq!(body["vaults"][0]["id"], 2);
+        assert_eq!(body["vaults"][0]["manifest_ready"], false);
+
+        let (status, _, _) = get(&fixture, &bob, "/api/v1/vaults/1").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _, _) = call(
+            &fixture.state,
+            cookie_request(Method::POST, "/api/v1/vaults", &alice, Some(&csrf)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[tokio::test]

@@ -119,6 +119,26 @@ pub struct ThumbStateCount {
     pub count: i64,
 }
 
+/// Client-side encrypted vault metadata. The KDF salt and verifier are returned
+/// to the owner because the browser needs them to derive the vault key; neither
+/// is a secret on its own, and no plaintext file content is stored here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Vault {
+    pub id: i64,
+    pub owner_id: i64,
+    pub uid: String,
+    pub name: String,
+    pub kdf: String,
+    pub kdf_salt: String,
+    pub kdf_iterations: i64,
+    pub verifier: String,
+    pub bytes: i64,
+    pub manifest_size: i64,
+    pub manifest_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// One year in the timeline. Items without a capture date are excluded.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct YearBucket {

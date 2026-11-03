@@ -83,11 +83,14 @@ but cannot recover plaintext without the user's password.
   so demoting an admin or deactivating an account takes effect on the next
   request instead of waiting for session expiry.
 - `/api/v1/items`, `/api/v1/counts`, `/api/v1/clouds`, `/api/v1/bootstrap`,
-  `/api/v1/years`, `/api/v1/months`, `/api/v1/albums` and `/api/v1/stats` are
-  constrained to `owner_id = session user`. A `cloud` parameter must be present
-  in that user's `user_clouds` rows. Timeline and album covers are queries over
-  the same owner-scoped rows; the album predicates are fixed in code and never
-  come from user input.
+  `/api/v1/years`, `/api/v1/months`, `/api/v1/albums`, `/api/v1/vaults` and
+  `/api/v1/stats` are constrained to `owner_id = session user`. A `cloud`
+  parameter must be present in that user's `user_clouds` rows. Timeline and
+  album covers are queries over the same owner-scoped rows; the album
+  predicates are fixed in code and never come from user input.
+- `/api/v1/vaults` only exposes KDF metadata (salt, iterations, verifier) to the
+  vault owner. No vault key, plaintext file content or another owner's vault id
+  is returned; an unknown or unowned id returns `404`.
 - A missing, unowned or unknown library returns `404`; it never returns `403`
   with a name, so one user cannot enumerate another user's library keys.
 - `/api/v1/admin/users` and `/api/v1/admin/users/{id}` require the admin role.
