@@ -10,28 +10,34 @@ the production box.
 | Path | Purpose |
 | --- | --- |
 | `crates/mng-core` | Config, Seafile E2EE crypto, chunk and manifest primitives |
-| `crates/mngd` | Native HTTP service: immutable PWA, health, future API/auth/RBAC |
+| `crates/mng-auth` | Password verification, signed sessions, CSRF and login rate limiting |
+| `crates/mng-db` | Read-only SQLite models for users, libraries and items |
+| `crates/mngd` | Native HTTP service: immutable PWA, health, auth API, future RBAC |
 | `crates/mng-wasm` | Browser-facing E2EE engine compiled to WebAssembly |
 | `crates/mng-sign` | Offline release signer (P-256 ECDSA) and verifier |
+| `extension/` | MNG Trusted browser extension (Chromium MV3 / Orion) |
 | `web/` | PWA shell + JavaScript browser adapter |
-| `ops/` | systemd, nginx, deploy and verification scripts |
+| `ops/` | systemd, nginx, deploy, snapshot and verification scripts |
 | `docs/` | Architecture, migration plan, security and operations |
 
 ## Local checks
 
 ```powershell
-cargo test -p mng-core
-cargo build -p mngd -p mng-sign
+cargo test --workspace
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+node --test extension/tests/trust.test.mjs
 ```
 
 ARMv7 static release (source stays on the build machine):
 
 ```powershell
-cargo build -p mngd --release --target armv7-unknown-linux-musleabihf
+python -m pip install --user ziglang==0.16.0
+.\tools\build-armv7.ps1
 ```
 
-The GitHub Actions workflow in `.github/workflows/` runs the same commands and
-publishes checksummed artifacts.
+The GitHub Actions workflow in `.github/workflows/` runs the same commands,
+plus the extension tests and browser build.
 
 ## Trust boundaries
 
@@ -39,7 +45,9 @@ publishes checksummed artifacts.
   Rust/WASM engine. `mngd` never receives them.
 - The update signing key is generated and used offline. CI and the server only
   see the public key.
-- The PWA verifies the signed manifest, every asset hash and the version before
-  caching an update.
+- The MNG Trusted extension verifies signed release metadata from GitHub,
+  hashes the bytes the cloud origin returns, and fails closed to a red warning.
+- The PWA service worker still verifies the signed manifest before caching an
+  update; it is defense in depth, not the trust anchor.
 
 See `docs/SECURITY.md` for the full model and current limitations.

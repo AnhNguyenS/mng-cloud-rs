@@ -98,8 +98,13 @@ POST /api/v1/auth/logout  ── requires X-CSRF-Token, clears the cookie
   and client IP.
 - The database connection used for login is read-only. `last_login_at` stays
   untouched until a dedicated native writer replaces PHP.
-- `readyz` exposes whether auth is configured, so a missing secret is visible
-  without exposing the secret itself.
+- The read model comes from a root timer that copies the live WAL database into
+  `/run/mng-cloud-snapshot/mng-cloud.sqlite` every minute. `mngd` opens that
+  immutable snapshot as `mng`, so it never needs access to the `www-data`
+  directory or the live WAL/SHM files.
+- `readyz` exposes whether auth is configured and whether the snapshot is
+  readable, so a missing secret or stale snapshot is visible without exposing
+  secrets.
 
 ## Why not rewrite `seaf-server`
 

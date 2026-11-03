@@ -76,6 +76,23 @@ but cannot recover plaintext without the user's password.
   closed with `503`; the static PWA and health probes remain available.
 - `last_login_at` is not written while SQLite is opened read-only.
 
+## Read-only database snapshot
+
+The legacy SQLite database is owned by `www-data` and stays in WAL mode for the
+PHP application. `mngd` never opens it. A root systemd timer copies it with
+SQLite's online backup API, runs `PRAGMA quick_check`, and atomically replaces
+`/run/mng-cloud-snapshot/mng-cloud.sqlite` (mode `0440`, owner `root:mng`).
+`mngd` opens the snapshot with `immutable=1`.
+
+- The snapshot is tmpfs-only: no extra eMMC/SD writes and no persistent copy of
+  password hashes outside the original database.
+- The `mng` account gets read-only access to a single database file, not to
+  `/var/lib/mng-cloud`, the WAL/SHM files, or the PHP secrets.
+- Snapshot contents are at most one minute old. A deactivated account or
+  changed password can remain valid for that window.
+- A corrupted or unreadable source leaves the previous snapshot in place; the
+  timer fails loudly in the journal instead of publishing partial bytes.
+
 ## Immutable frontend
 
 - Releases are copied to `/var/www/mng-cloud-app/releases/<version>/`, owned by

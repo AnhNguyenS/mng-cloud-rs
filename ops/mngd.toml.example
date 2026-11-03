@@ -4,6 +4,11 @@ data_dir = "/var/lib/mng-cloud"
 public_url = "https://cloud.example.com"
 log_filter = "info,mngd=info"
 
+# Read model. The snapshot service copies the live PHP database into tmpfs
+# every minute; mngd opens it with immutable=1 and never touches the live WAL.
+database = "/run/mng-cloud-snapshot/mng-cloud.sqlite"
+database_immutable = true
+
 # Session cookie. The signing secret is NOT stored here; set
 # MNGD_SESSION_SECRET or put it in session_key_file.
 session_key_file = "/etc/mng-cloud/session.key"

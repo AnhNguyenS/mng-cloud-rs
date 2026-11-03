@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the read-only SQLite snapshot for mngd
+Documentation=https://github.com/your-org/mng-cloud-rs
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/mng-cloud-snapshot
+Nice=10
+IOSchedulingClass=idle

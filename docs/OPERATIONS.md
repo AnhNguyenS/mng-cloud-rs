@@ -7,9 +7,14 @@ useradd --system --home /var/lib/mng-cloud --shell /usr/sbin/nologin mng || true
 install -d -o root -g root -m 0755 /var/www/mng-cloud-app/releases
 install -d -o mng  -g mng  -m 0750 /var/lib/mng-cloud
 install -d -o root -g root -m 0755 /etc/mng-cloud
+install -d -o root -g root -m 0755 /usr/local/libexec
 install -m 0644 ops/mngd.toml.example /etc/mng-cloud/mngd.toml
 install -m 0644 ops/systemd/mngd.service /etc/systemd/system/mngd.service
+install -m 0755 ops/mng-cloud-snapshot.sh /usr/local/libexec/mng-cloud-snapshot
+install -m 0644 ops/systemd/mng-cloud-snapshot.service /etc/systemd/system/mng-cloud-snapshot.service
+install -m 0644 ops/systemd/mng-cloud-snapshot.timer /etc/systemd/system/mng-cloud-snapshot.timer
 systemctl daemon-reload
+systemctl enable --now mng-cloud-snapshot.timer
 
 # Session signing secret. Authentication fails closed until this exists:
 # login returns 503, while /healthz, /readyz and /app/ keep serving.
@@ -29,7 +34,58 @@ precedence over `MNGD_SESSION_SECRET_FILE`, which overrides
 `session_key_file`.
 
 `/var/lib/mng-cloud` already exists with application data; adjust ownership only
-if `mngd` needs read/write access. The phase-1 service only stats it.
+if `mngd` needs read/write access. `mngd` only stats it; database bytes come
+from the read-only snapshot below.
+
+## Read-only database snapshot
+
+The PHP application owns `/var/lib/mng-cloud/mng-cloud.sqlite` in WAL mode.
+`mngd` must not open that file: it cannot traverse the `www-data` directory and
+a live WAL reader needs write access to the `-shm`/`-wal` files.
+
+Instead, a root systemd timer copies the database through SQLite's online
+backup API into tmpfs:
+
+```
+/var/lib/mng-cloud/mng-cloud.sqlite        (PHP, writer, www-data)
+        │  sqlite3 .backup + PRAGMA quick_check   every minute
+        ▼
+/run/mng-cloud-snapshot/mng-cloud.sqlite  (root-owned, 0440 root:mng)
+        │  immutable=1, read-only
+        ▼
+      mngd (mng)
+```
+
+Install the helper and timer once with the prerequisites above, then verify:
+
+```bash
+systemctl start mng-cloud-snapshot.service
+ls -l /run/mng-cloud-snapshot/mng-cloud.sqlite
+sudo -u mng sqlite3 /run/mng-cloud-snapshot/mng-cloud.sqlite 'SELECT COUNT(*) FROM users;'
+journalctl -u mng-cloud-snapshot -n 20
+```
+
+Configure `mngd`:
+
+```toml
+database = "/run/mng-cloud-snapshot/mng-cloud.sqlite"
+database_immutable = true
+```
+
+Properties of this design:
+
+- The snapshot is replaced atomically; a request uses either the old or the new
+  complete file.
+- The refresh costs about 0.2 s of CPU and 8 MB of tmpfs per minute on the
+  RK3229; it does not write to the SD/eMMC card.
+- `/run` is cleared on reboot. The timer runs 15 s after boot; `mngd` stays up
+  and reports `degraded` until the first snapshot exists, then recovers without
+  a restart.
+- Data can be up to one minute stale: user creation, password changes and
+  deactivation take effect within that window. Do not use this model for data
+  that must be read immediately after a write.
+- `last_login_at` is never updated by `mngd`; the live database stays
+  read-only.
 
 ## Build locally (Windows or Linux)
 
@@ -283,28 +339,41 @@ In a private browser profile with the extension installed:
    the red bar.
 3. Remove the element; use **Kiểm tra lại** in the popup to re-verify.
 
-## Current canary (2026-11-03)
+## Current canary (2026-11-04)
 
-The first canary is installed but **not exposed through nginx** yet:
+The canary is installed but **not exposed through nginx** yet:
 
 - user: `mng` (system account, no login shell)
-- binary: `/usr/local/bin/mngd`
+- binary: `/usr/local/bin/mngd` (auth + read model)
 - app: `/var/www/mng-cloud-app/releases/0.1.3` (`current` symlink)
 - config: `/etc/mng-cloud/mngd.toml`
+- session key: `/etc/mng-cloud/session.key` (`root:mng`, `0440`)
+- database: `/run/mng-cloud-snapshot/mng-cloud.sqlite` (`mng`, `0440`,
+  refreshed by `mng-cloud-snapshot.timer` every 60 s)
 - public key: `/etc/mng-cloud/update-public.jwk`
 - unit: `/etc/systemd/system/mngd.service` (enabled, `127.0.0.1:8090`)
-- writable state: none yet; `/var/lib/mng-cloud` is only stat'ed for readiness
+- writable state: none; `/var/lib/mng-cloud` is only stat'ed for readiness
+
+`readyz` reports `status: ready`, `database.mode: snapshot`, three users and
+`auth.available: true`. A login probe with an unknown user returns
+`401 bad_credentials`, which proves the snapshot and bcrypt path work without
+touching a real account.
 
 The local signed release is `0.1.4` (sequence 4); production still serves
-`0.1.3` until the next deploy. The PHP tree and the existing nginx vhost are
-untouched. `/app/` is not public until the nginx location is added
-deliberately.
+`0.1.3` until the next app deploy. The PHP tree and the existing nginx vhost are
+untouched. `/app/` and `/api/v1/auth/*` are not public until nginx locations are
+added deliberately.
+
+Rollback point for this canary:
+`/root/mng-cloud-backup-auth-20261104-003426` (binary, config, unit).
 
 ```bash
 systemctl status mngd
+systemctl status mng-cloud-snapshot.timer
 curl -fsS http://127.0.0.1:8090/healthz
 curl -fsS http://127.0.0.1:8090/readyz
 journalctl -u mngd --since -10min
+journalctl -u mng-cloud-snapshot --since -10min
 ```
 
 ## Rollback
