@@ -1,0 +1,15 @@
+﻿<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>MNG Cloud signed releases</title>
+<style>body{font:16px system-ui;max-width:42rem;margin:3rem auto;padding:0 1rem;line-height:1.5}code{background:#eee;padding:.1rem .3rem}</style>
+<h1>MNG Cloud signed releases</h1>
+<p>This branch hosts only signed release metadata. The Trusted Security Extension verifies it independently of the cloud origin.</p>
+<ul>
+<li><a href="releases/current/release.json">releases/current/release.json</a></li>
+<li><a href="releases/current/release.sig">releases/current/release.sig</a></li>
+<li><a href="releases/current/manifest.json">releases/current/manifest.json</a></li>
+<li><a href="releases/current/manifest.sig">releases/current/manifest.sig</a></li>
+</ul>
+<p>Signatures use ECDSA P-256/SHA-256. The public key is pinned in the extension build; this site is only transport.</p>
+</html>
