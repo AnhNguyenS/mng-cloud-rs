@@ -73,48 +73,44 @@ cover the case.
 Bad signatures and rollback failures are never masked by the cached release.
 The cache is only used when GitHub metadata cannot be reached.
 
-## Configuration
+## Production configuration
 
-```json
-{
-  "schema": 1,
-  "extensionVersion": "0.1.0",
-  "deployments": [
-    { "origin": "https://cloud.example.com", "appBase": "/app/" }
-  ],
-  "releaseBase": "https://example.github.io/mng-cloud-rs/releases/current/",
-  "pinnedPublicJwk": { "kty": "EC", "crv": "P-256", "x": "...", "y": "..." },
-  "limits": {
-    "maxAssetBytes": 33554432,
-    "maxTotalBytes": 134217728,
-    "releaseTimeoutMs": 15000,
-    "pageTimeoutMs": 45000
-  },
-  "requireOnlineVerification": false
-}
-```
+`extension/config.production.json` is checked in and pins:
+
+- cloud origin `https://anh-cloud.duckdns.org`, app base `/app/`;
+- release base
+  `https://anhnguyens.github.io/mng-cloud-rs/releases/current/`;
+- the update public JWK from `ops/update-public.jwk`;
+- response size and timeout limits.
+
+`tools/build-extension.py --production` rejects loopback origins and placeholder
+hostnames. `extension/config.local.json` is gitignored and is only for local
+testing. Any origin, release-base or key change requires a new extension version
+and distribution.
+
+Field rules enforced by the build:
 
 - `deployments[].origin` must be HTTPS (HTTP only for loopback development).
 - `appBase` must start and end with `/`.
-- `releaseBase` must be HTTPS and end with `/`. The extension fetches
-  `release.json`, `release.sig`, and the manifest names from this directory.
+- `releaseBase` must be HTTPS and end with `/`; the extension fetches
+  `release.json`, `release.sig` and the manifest names from this directory.
 - `requireOnlineVerification: true` disables the cached-release fallback.
 - Limits are enforced while streaming; oversized responses abort verification.
 - `extensionVersion` is stamped into `manifest.json` by the build.
 
-`tools/build-extension.py --production` rejects loopback origins and placeholder
-hostnames. `extension/config.local.json` is gitignored and is only for local
-testing.
-
 ## Build and load
 
 ```bash
-cp extension/config.example.json extension/config.production.json
-# edit deployments[0].origin, releaseBase, pinnedPublicJwk
 python tools/build-extension.py \
   --config extension/config.production.json \
   --production \
   --zip
+```
+
+Publish the matching signed metadata before exposing a new app release:
+
+```powershell
+.\tools\publish-release-metadata.ps1 -ReleaseDir dist\release
 ```
 
 Load `dist/extension`:

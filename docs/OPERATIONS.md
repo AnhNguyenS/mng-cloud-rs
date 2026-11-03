@@ -181,42 +181,57 @@ before re-signing, and remove `dist/app` before repackaging.
 
 ## Publish the release metadata
 
-GitHub Pages (or the repository's release branch) is the trusted transport for
-signed metadata. The extension fetches `releaseBase + release.json`, so the
-path must end with `/`.
+GitHub Pages is the trusted transport for signed metadata. The production
+repository is `https://github.com/AnhNguyenS/mng-cloud-rs` and the branch is
+`gh-pages`; the extension reads:
 
-Recommended layout:
+```
+https://anhnguyens.github.io/mng-cloud-rs/releases/current/
+```
+
+The branch contains only signed metadata and a small index page:
 
 ```
 releases/current/release.json
 releases/current/release.sig
 releases/current/manifest.json
 releases/current/manifest.sig
+releases/<version>/...        immutable copy of the same four files
 ```
 
-Publish the four files from `dist/release` to `releases/current/`, and attach
-the complete `dist/app` directory to the GitHub release for auditability. The
-extension never trusts the server's copy of `release.json` or `manifest.json`.
+Publish from the offline signing machine after `mng-sign release`:
 
-Set `releaseBase` in the extension config to the public URL of that directory,
-for example:
-
-```json
-"releaseBase": "https://example.github.io/mng-cloud-rs/releases/current/"
+```powershell
+.\tools\publish-release-metadata.ps1 -ReleaseDir dist\release
 ```
+
+The script verifies the signatures again, refuses to overwrite a version
+directory with different bytes, updates `releases/current/`, commits, and pushes
+`gh-pages`. Use `-NoPush` to inspect the commit first. It never reads the
+private key.
 
 The cloud origin keeps serving only the app assets (`/app/`). Publishing the
 app assets on GitHub is optional; the extension hashes the bytes it reads from
-the cloud origin, not from GitHub.
+the cloud origin, not from GitHub. A GitHub Pages change can take a minute to
+propagate, so check the URL before deploying the matching app release.
+
+After publishing, verify the public metadata and the extension's pinned key:
+
+```bash
+cargo run -p mng-sign --release -- verify-release \
+  --public-key ops/update-public.jwk \
+  --dir dist/release
+curl -fsS https://anhnguyens.github.io/mng-cloud-rs/releases/current/release.json
+```
 
 ## Build the extension
 
-Create a production config from the example, set the cloud origin, `appBase`,
-and `releaseBase`:
+The production config is checked in as `extension/config.production.json`. It
+pins the cloud origin, `appBase`, the Pages release base and the update public
+key. Change it only when the origin or key rotates; every change requires a new
+extension build and version bump.
 
 ```bash
-cp extension/config.example.json extension/config.production.json
-# edit extension/config.production.json
 python tools/build-extension.py \
   --config extension/config.production.json \
   --production \

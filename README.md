@@ -1,9 +1,13 @@
 # MNG Cloud — Rust / WASM
 
-Private rewrite of the `mng-cloud` layer in front of the upstream Seafile
+Independent rewrite of the `mng-cloud` layer in front of the upstream Seafile
 storage engine (`seaf-server` + Seahub). The server only receives native
 binaries and signed static assets; source lives in this repository, never on
 the production box.
+
+- Source: <https://github.com/AnhNguyenS/mng-cloud-rs>
+- Signed release metadata:
+  <https://anhnguyens.github.io/mng-cloud-rs/releases/current/>
 
 ## Layout
 

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "extensionVersion": "0.1.0",
+  "deployments": [
+    {
+      "origin": "https://anh-cloud.duckdns.org",
+      "appBase": "/app/"
+    }
+  ],
+  "releaseBase": "https://anhnguyens.github.io/mng-cloud-rs/releases/current/",
+  "pinnedPublicJwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "3bbemTZFtkodG2JOMOoFzcySEzCLqtnjPxt4__Y0Fis",
+    "y": "ntmYDM3Kt-bvBK-7bBP6MvUb8mZExEd97fEiyk-H94U"
+  },
+  "limits": {
+    "maxAssetBytes": 33554432,
+    "maxTotalBytes": 134217728,
+    "releaseTimeoutMs": 15000,
+    "pageTimeoutMs": 45000
+  },
+  "requireOnlineVerification": false
+}

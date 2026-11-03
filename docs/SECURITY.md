@@ -237,12 +237,16 @@ sanitize its input; do not add `'unsafe-inline'` or `'unsafe-eval'`.
 
 ## Build and supply chain
 
-- Source lives in a private Git repository, not on the server.
+- Source lives in a public Git repository
+  (`https://github.com/AnhNguyenS/mng-cloud-rs`), never on the server.
 - GitHub Actions builds ARMv7 from a tagged commit and publishes SHA-256
   checksums.
 - The server receives only the binary and the signed static release.
-- GitHub Pages (or the repository's release branch) hosts the signed
-  `release.json`, `release.sig`, `manifest.json` and `manifest.sig`.
+- GitHub Pages (`gh-pages` branch) hosts only the signed `release.json`,
+  `release.sig`, `manifest.json` and `manifest.sig` under
+  `https://anhnguyens.github.io/mng-cloud-rs/releases/`. The private key stays
+  on the offline signing machine; `tools/publish-release-metadata.ps1` verifies
+  the signatures before pushing.
 - The extension is built from `extension/src` by `tools/build-extension.py`,
   which pins the public key and stamps allowed deployment origins.
 - `Cargo.lock` is committed; dependency updates are reviewed.

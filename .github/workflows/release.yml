@@ -50,6 +50,9 @@ jobs:
         with:
           key: release-web
       - uses: taiki-e/install-action@wasm-pack
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: |
           mkdir -p dist
           wasm-pack build crates/mng-wasm --release --target web --out-dir ../../dist/wasm
@@ -68,6 +71,7 @@ jobs:
             'The package command stamps sw.js, writes manifest.json/manifest.sig and' \
             'refuses to use a key that is present on the server.' \
             > dist/SIGNING-REQUIRED.txt
+          python tools/build-extension.py --config extension/config.production.json --production --out dist/extension --zip
       - uses: actions/upload-artifact@v4
         with:
           name: web
@@ -112,4 +116,6 @@ jobs:
 
             `app/` is the web template. Sign it offline with `mng-sign package`
             before deployment. The private signing key is never present in CI.
+            The archive also contains `extension/` and `extension.zip`, built
+            from the production config with the pinned update key.
             Verify `mngd` with the attached SHA-256 before installing.

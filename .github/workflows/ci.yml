@@ -80,3 +80,6 @@ jobs:
       - run: python tools/build-extension.py --out dist/extension
       - run: test -s dist/extension/manifest.json
       - run: test -s dist/extension/icons/128.png
+      - run: python tools/build-extension.py --config extension/config.production.json --production --out dist/extension-production --zip
+      - run: test -s dist/extension-production/manifest.json
+      - run: test -s dist/extension-production.zip
