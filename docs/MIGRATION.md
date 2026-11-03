@@ -6,7 +6,7 @@ slice has a rollback path and no slice rewrites Seafile data.
 | # | Slice | State | Exit criteria |
 | --- | --- | --- | --- |
 | 0 | Baseline, blank-media guard, perf/stability | done | importers quarantine all-NUL sources; services healthy |
-| 1 | Monorepo, CI, ARMv7 `mngd`, signed PWA shell | in progress | `mngd` canary on `127.0.0.1:8090`; `/app/` signed and served read-only |
+| 1 | Monorepo, CI, ARMv7 `mngd`, signed PWA shell | done | `mngd` canary on `127.0.0.1:8090`; `/app/` signed and served read-only |
 | 2 | Rust/WASM E2EE engine parity | core done | decrypt/encrypt vectors match WebCrypto; browser adapter loads WASM |
 | 3 | Config + SQLite read model + sessions | next | users, items, thumbnails readable without PHP |
 | 4 | Auth + RBAC parity | planned | login, roles, per-library ACL, CSRF, rate limits |

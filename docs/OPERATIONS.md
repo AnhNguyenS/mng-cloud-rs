@@ -116,6 +116,28 @@ In a private browser profile:
    cached signed version, and a new install/update must fail verification.
 4. Confirm the console has no CSP or Trusted Types violations.
 
+## Current canary (2026-11-03)
+
+The first canary is installed but **not exposed through nginx** yet:
+
+- user: `mng` (system account, no login shell)
+- binary: `/usr/local/bin/mngd`
+- app: `/var/www/mng-cloud-app/releases/0.1.3` (`current` symlink)
+- config: `/etc/mng-cloud/mngd.toml`
+- public key: `/etc/mng-cloud/update-public.jwk`
+- unit: `/etc/systemd/system/mngd.service` (enabled, `127.0.0.1:8090`)
+- writable state: none yet; `/var/lib/mng-cloud` is only stat'ed for readiness
+
+The PHP tree and the existing nginx vhost are untouched. `/app/` is not
+public until the nginx location is added deliberately.
+
+```bash
+systemctl status mngd
+curl -fsS http://127.0.0.1:8090/healthz
+curl -fsS http://127.0.0.1:8090/readyz
+journalctl -u mngd --since -10min
+```
+
 ## Rollback
 
 - App: point `current` at the previous release and restart `mngd`.
